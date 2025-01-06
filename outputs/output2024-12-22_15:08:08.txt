@@ -1,0 +1,6 @@
+input_prompt,question,correct_answers,output_prediction
+What musician formed a singing duo with Art Garfunkel in 1963? True: Paul Simon pred:  Simon and Garfunkel
+Q: What is the name of the head
+': 0.0, 'partial_match': 27.2, 'bleu': 1.1906}
+Input format: None <question> None
+
