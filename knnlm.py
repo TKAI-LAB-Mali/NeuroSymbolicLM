@@ -252,6 +252,10 @@ class KNNWrapper(object):
     # For every model name and key type, returns a lambda that returns the relevant layer in the model, 
     # and whether the input of that layer should be captured (True) or the output (False)
     model_layer_to_capture = {
+        'llama': {
+            KEY_TYPE.last_ffn_input: (lambda model: model.base_model.layers[-1].mlp, True),
+            KEY_TYPE.last_ffn_output: (lambda model: model.base_model.layers[-1], False), 
+        },
         'bart': {
             KEY_TYPE.last_ffn_input: (lambda model: model.base_model.decoder.layers[-1].fc1, True),
             KEY_TYPE.last_ffn_output: (lambda model: model.base_model.decoder.layers[-1], False),
@@ -375,6 +379,9 @@ class KNNSaver(object):
         logger.info('Building index')
         index_name = get_index_path(self.dstore_dir, self.model.config.model_type, self.dstore_size, self.dimension) 
         
+        while self.dstore_size<ncentroids:
+            ncentroids=ncentroids//2
+
         # Initialize faiss index
         quantizer = faiss.IndexFlatL2(self.dimension)
         index = faiss.IndexIVFPQ(quantizer, self.dimension,
