@@ -24,7 +24,10 @@ https://huggingface.co/models?filter=causal-lm
 import itertools
 import logging
 import math
+<<<<<<< HEAD
 import copy
+=======
+>>>>>>> origin/main
 import os
 import datetime
     
@@ -65,7 +68,11 @@ from transformers.utils.versions import require_version
 from knnlm import KNNWrapper, KNNSaver, KEY_TYPE, DIST
 from retomaton import RetomatonWrapper
 
+<<<<<<< HEAD
 # from stats import datasetStats
+=======
+from stats import datasetStats
+>>>>>>> origin/main
 import numpy as np
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -319,6 +326,7 @@ def main():
         raw_datasets = load_dataset(
             data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
         )
+<<<<<<< HEAD
         # if "validation" not in raw_datasets.keys():
         #     raw_datasets["validation"] = load_dataset(
         #         data_args.dataset_name,
@@ -332,6 +340,21 @@ def main():
         #         split=f"train[{data_args.validation_split_percentage}%:]",
         #         cache_dir=model_args.cache_dir,
         #     )
+=======
+        if "validation" not in raw_datasets.keys():
+            raw_datasets["validation"] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=f"train[:{data_args.validation_split_percentage}%]",
+                cache_dir=model_args.cache_dir,
+            )
+            raw_datasets["train"] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=f"train[{data_args.validation_split_percentage}%:]",
+                cache_dir=model_args.cache_dir,
+            )
+>>>>>>> origin/main
     else:
         data_files = {}
         dataset_args = {}
@@ -444,6 +467,7 @@ def main():
     tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
     
     def extract_multi_context(triviaq):
+<<<<<<< HEAD
         triviaq["context"] = " ".join(triviaq["wiki_context"])
 
         # triviaq["context"] = ""
@@ -451,6 +475,13 @@ def main():
         #     triviaq["context"] += " ".join(triviaq["entity_pages"]["wiki_context"]) + " "
         # if len(triviaq["search_results"]["search_context"])>0:
         #     triviaq["context"] += " ".join(triviaq["search_results"]["search_context"])
+=======
+        triviaq["context"] = ""
+        if len(triviaq["entity_pages"]["wiki_context"])>0:
+            triviaq["context"] += " ".join(triviaq["entity_pages"]["wiki_context"]) + " "
+        if len(triviaq["search_results"]["search_context"])>0:
+            triviaq["context"] += " ".join(triviaq["search_results"]["search_context"])
+>>>>>>> origin/main
         # print(len(triviaq["context"]), "~ ")
         return triviaq
 
@@ -535,6 +566,7 @@ def main():
             )
         block_size = min(data_args.block_size, tokenizer.model_max_length)
 
+<<<<<<< HEAD
     dstore_sizes = [30719, 5119, 790, -1, 19455, 34815, 2047, -1]
 
     raw = copy.deepcopy(raw_datasets)
@@ -707,6 +739,168 @@ def main():
         if knn_wrapper is not None:
             knn_wrapper.break_out()
     print(dstore_sizes)
+=======
+    if knn_args.build_index or knn_args.save_knnlm_dstore or knn_args.cluster_dstore or training_args.do_eval:
+        # print(raw_datasets["validation"]["context"])
+        
+        # datastats = datasetStats()
+        # datastats.stats(raw_datasets[data_args.eval_subset]["ip_question"], "wholeIP"+data_args.eval_subset+".png")
+        seed = 89
+        sample_size = min(5000, raw_datasets[data_args.eval_subset].num_rows)
+        shuffled_dataset = raw_datasets[data_args.eval_subset].shuffle(seed=seed)
+        sampled_dataset = shuffled_dataset.select(range(sample_size))
+        raw_datasets[data_args.eval_subset] = sampled_dataset
+        # print(raw_datasets[data_args.eval_subset].num_rows)
+        # datastats.stats(raw_datasets[data_args.eval_subset]["ip_question"], "sampleIP"+data_args.eval_subset+".png")
+
+        # Preprocessing the datasets.
+        # First we tokenize all the texts.
+        # if training_args.do_train:
+            # print()
+        # else:
+        #     column_names = raw_datasets["validation"].column_names
+        text_column_name = "context" if "context" in column_names else column_names[0]
+
+        with training_args.main_process_first(desc="dataset map tokenization"):
+            tokenized_datasets = raw_datasets.map(
+                tokenize_function,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                remove_columns=column_names,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on dataset",
+            )
+        print("tokenized_dataset format: ",tokenized_datasets[data_args.eval_subset].column_names)
+        # Note that with `batched=True`, this map processes 1,000 texts together, so group_texts throws away a remainder
+        # for each of those groups of 1,000 texts. You can adjust that batch_size here but a higher value might be slower
+        # to preprocess.
+        #
+        # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
+        # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
+
+        with training_args.main_process_first(desc="grouping texts together"):
+            lm_datasets = tokenized_datasets.map(
+                group_texts_context,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc=f"Grouping texts in chunks of {block_size}",
+        )
+        print("grouped texts format: ",lm_datasets[data_args.eval_subset].column_names)
+
+    for split, data in lm_datasets.items():
+        total_eval_tokens = 0        
+        for chunk in data['labels']:
+            total_eval_tokens += len([x for x in chunk[1:] if x != padding_index])
+        logger.info(f'[{split}] Total eval tokens: {total_eval_tokens}')
+        # if knn_args.dstore_size is None and split == 'train':
+        if knn_args.dstore_size is None and split == data_args.eval_subset:
+            knn_args.dstore_size = total_eval_tokens
+        print('Dstore size: ', knn_args.dstore_size)
+
+    if training_args.do_train:
+        if "train" not in tokenized_datasets:
+            raise ValueError("--do_train requires a train dataset")
+        train_dataset = lm_datasets["train"]
+        if data_args.max_train_samples is not None:
+            train_dataset = train_dataset.select(range(data_args.max_train_samples))
+
+    if training_args.do_eval or data_args.prompt:
+        if data_args.eval_subset not in tokenized_datasets:
+            raise ValueError("--do_eval requires a validation dataset")
+        eval_dataset = lm_datasets[data_args.eval_subset]
+        if data_args.max_eval_samples is not None:
+            eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
+        print("eval dataset picked with cols", eval_dataset.column_names)
+
+    # Initialize our Trainer
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset if training_args.do_train else None,
+        eval_dataset=eval_dataset if training_args.do_eval else None,
+        tokenizer=tokenizer,
+        # Data collator will default to DataCollatorWithPadding, so we change it.
+        data_collator=default_data_collator,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=data_args.patience)] if data_args.patience is not None else None,
+    )
+
+    if knn_args.retomaton or knn_args.cluster_dstore:
+        knn_wrapper = RetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
+            dimension=dimension, 
+            knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
+            no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
+            recompute_dists=knn_args.recompute_dists,
+            k=knn_args.k, lmbda=knn_args.lmbda, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
+            no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
+            members=knn_args.members)
+    elif knn_args.knn:
+        knn_wrapper = KNNWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
+            dimension= dimension, 
+            knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
+            no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
+            recompute_dists=knn_args.recompute_dists,
+            k=knn_args.k, lmbda=knn_args.lmbda, knn_temp=knn_args.knn_temp, probe=knn_args.probe)
+    elif knn_args.save_knnlm_dstore or knn_args.build_index:
+        knn_wrapper = KNNSaver(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
+            dimension=dimension, knn_keytype=knn_args.knn_keytype)
+    
+    if knn_wrapper is not None:
+        knn_wrapper.break_into(model)
+
+    # Training
+    if training_args.do_train:
+        checkpoint = None
+        if training_args.resume_from_checkpoint is not None:
+            checkpoint = training_args.resume_from_checkpoint
+        elif last_checkpoint is not None:
+            checkpoint = last_checkpoint
+        train_result = trainer.train(resume_from_checkpoint=checkpoint)
+        trainer.save_model()  # Saves the tokenizer too for easy upload
+
+        metrics = train_result.metrics
+
+        max_train_samples = (
+            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+        )
+        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
+
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
+
+    # Evaluation
+    if training_args.do_eval:
+        logger.info("*** Evaluate ***")
+
+        metrics = trainer.evaluate()
+        
+        logger.info('Evaluation complete, calculating perplexity')
+
+        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
+        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
+        try:
+            perplexity = math.exp(metrics["eval_loss"])
+        except OverflowError:
+            perplexity = float("inf")
+        metrics["perplexity"] = perplexity
+
+        if knn_wrapper is not None:
+            knn_metrics = knn_wrapper.get_metrics()
+            metrics.update(knn_metrics)
+
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
+
+    if knn_args.build_index:
+        knn_wrapper.build_index()
+
+    if knn_args.cluster_dstore:
+        knn_wrapper.cluster_dstore(num_clusters=knn_args.num_clusters, sample_size=knn_args.sample_size, model=model)
+    
+    if knn_wrapper is not None:
+        knn_wrapper.break_out()
+>>>>>>> origin/main
     
 if __name__ == "__main__":
     main()

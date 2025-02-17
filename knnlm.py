@@ -80,7 +80,7 @@ class KNNWrapper(object):
             raise ValueError('Cannot build a datastore without the data.')
 
         start = time.time()
-        index_name = get_index_path(self.dstore_dir, self.model.config.model_type, self.dstore_size, self.dimension) 
+        index_name = get_index_path(self.dstore_dir, self.model.module.config.model_type, self.dstore_size, self.dimension) 
         cpu_index = faiss.read_index(index_name, faiss.IO_FLAG_ONDISK_SAME_DIR)
         logger.info(f'Reading datastore took {time.time() - start} s')
         cpu_index.nprobe = self.probe
@@ -100,7 +100,7 @@ class KNNWrapper(object):
         # https://github.com/facebookresearch/faiss/issues/2181
         cpu_index.make_direct_map()
 
-        keys_vals_prefix = get_dstore_path(self.dstore_dir, self.model.config.model_type, self.dstore_size, self.dimension)
+        keys_vals_prefix = get_dstore_path(self.dstore_dir, self.model.module.config.model_type, self.dstore_size, self.dimension)
         if not self.no_load_keys:
             self.keys = np.memmap(f'{keys_vals_prefix}_keys.npy', dtype=np.float16, mode='r',
                                   shape=(self.dstore_size, self.dimension))
@@ -130,22 +130,22 @@ class KNNWrapper(object):
 
     def break_into(self, model):
         self.model = model
-        model.broken_into = True
+        model.module.broken_into = True
         self.reconstruct_index, self.index = self.setup_faiss()
-        self.is_encoder_decoder = model.config.is_encoder_decoder
+        self.is_encoder_decoder = model.module.config.is_encoder_decoder
 
         # Inject our pre_forward_hook to capture the labels at every forward pass
-        self.original_forward_func = model.forward
-        model.forward = self.pre_forward_hook
+        self.original_forward_func = model.module.forward
+        model.module.forward = self.pre_forward_hook
         
         # Inject our activation_capturer to capture the activations at every forward pass
-        layer_to_capture_fn, capture_input = KNNWrapper.model_layer_to_capture[model.config.model_type][self.knn_keytype]
+        layer_to_capture_fn, capture_input = KNNWrapper.model_layer_to_capture[model.module.config.model_type][self.knn_keytype]
         layer_to_capture = layer_to_capture_fn(model)
         self.activation_capturer = ActivationCapturer(layer_to_capture, capture_input=capture_input)
         self.register_hook(layer_to_capture, self.activation_capturer)
 
         # Inject our main function after the model's final layer
-        final_layer = KNNWrapper.get_model_last_layer(model.config.model_type)(model)
+        final_layer = KNNWrapper.get_model_last_layer(model.module.config.model_type)(model)
         self.register_hook(final_layer, self.post_forward_hook)
         self.vocab_size = final_layer.out_features
 
@@ -208,9 +208,9 @@ class KNNWrapper(object):
     def break_out(self):
         for h in self.hook_handles:
             h.remove()
-        if self.model is not None and self.model.broken_into is not None:
-            self.model.forward = self.original_forward_func
-            self.model.broken_into = None
+        if self.model is not None and self.model.module.broken_into is not None:
+            self.model.module.forward = self.original_forward_func
+            self.model.module.broken_into = None
     
     def get_metrics(self):
         return {}
@@ -242,35 +242,40 @@ class KNNWrapper(object):
     def get_model_last_layer(model_type):
         # works for gpt2, marian, t5. If a model does not have an ".lm_head" layer, 
         # add an "if model_type is ..." statement here, and return the output embedding layer
-        return lambda model: model.lm_head
+        return lambda model: model.module.lm_head
 
     @staticmethod
     def get_model_embedding_layer(model_type):
         if model_type.startswith('gpt2'):
-            return lambda model: model.transformer.wte
+            return lambda model: model.module.transformer.wte
 
     # For every model name and key type, returns a lambda that returns the relevant layer in the model, 
     # and whether the input of that layer should be captured (True) or the output (False)
     model_layer_to_capture = {
         'llama': {
+<<<<<<< HEAD
             KEY_TYPE.last_ffn_input: (lambda model: model.base_model.layers[-1].mlp, True),
             KEY_TYPE.last_ffn_output: (lambda model: model.base_model.layers[-1], False), 
+=======
+            KEY_TYPE.last_ffn_input: (lambda model: model.module.base_model.layers[-1].mlp, True), #fetches fisrt fully connected layer from the last decoder layer of the model
+            KEY_TYPE.last_ffn_output: (lambda model: model.module.base_model.layers[-1], False), # fetches entire last decoder layer
+>>>>>>> origin/main
         },
         'bart': {
-            KEY_TYPE.last_ffn_input: (lambda model: model.base_model.decoder.layers[-1].fc1, True),
-            KEY_TYPE.last_ffn_output: (lambda model: model.base_model.decoder.layers[-1], False),
+            KEY_TYPE.last_ffn_input: (lambda model: model.module.base_model.decoder.layers[-1].fc1, True),
+            KEY_TYPE.last_ffn_output: (lambda model: model.module.base_model.decoder.layers[-1], False),
         },
         'gpt2': {
-            KEY_TYPE.last_ffn_input: (lambda model: model.base_model.h[-1].mlp, True),
-            KEY_TYPE.last_ffn_output: (lambda model: model.base_model.h[-1], False),
+            KEY_TYPE.last_ffn_input: (lambda model: model.module.base_model.h[-1].mlp, True),
+            KEY_TYPE.last_ffn_output: (lambda model: model.module.base_model.h[-1], False),
         },
         'marian': {
-            KEY_TYPE.last_ffn_input: (lambda model: model.base_model.decoder.layers[-1].fc1, True),
-            KEY_TYPE.last_ffn_output: (lambda model: model.base_model.decoder.layers[-1], False),
+            KEY_TYPE.last_ffn_input: (lambda model: model.module.base_model.decoder.layers[-1].fc1, True),
+            KEY_TYPE.last_ffn_output: (lambda model: model.module.base_model.decoder.layers[-1], False),
         },
         't5': {
-            KEY_TYPE.last_ffn_input: (lambda model: model.base_model.decoder.block[-1].layer[2].DenseReluDense, True),
-            KEY_TYPE.last_ffn_output: (lambda model: model.base_model.decoder.block[-1].layer[2], False),
+            KEY_TYPE.last_ffn_input: (lambda model: model.module.base_model.decoder.block[-1].layer[2].DenseReluDense, True),
+            KEY_TYPE.last_ffn_output: (lambda model: model.module.base_model.decoder.block[-1].layer[2], False),
         }
 }
     
@@ -281,7 +286,7 @@ class KNNSaver(object):
         self.dstore_dir = dstore_dir
         self.dimension = dimension
         self.knn_keytype = KEY_TYPE.last_ffn_input if knn_keytype is None else knn_keytype
-
+        
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.model = None
@@ -298,24 +303,24 @@ class KNNSaver(object):
 
     def break_into(self, model):
         self.model = model
-        model.broken_into = True
-        self.is_encoder_decoder = model.config.is_encoder_decoder
+        model.module.broken_into = True
+        self.is_encoder_decoder = model.module.config.is_encoder_decoder
         
         # Inject our activation_capturer to capture the activations at every forward pass
-        layer_to_capture_fn, capture_input = KNNWrapper.model_layer_to_capture[model.config.model_type][self.knn_keytype]
+        layer_to_capture_fn, capture_input = KNNWrapper.model_layer_to_capture[model.module.config.model_type][self.knn_keytype]
         layer_to_capture = layer_to_capture_fn(model)
         self.activation_capturer = ActivationCapturer(layer_to_capture, capture_input=capture_input)
         self.register_hook(layer_to_capture, self.activation_capturer)
 
         # Inject our pre_forward_hook to capture the labels at every forward pass
-        self.original_forward_func = model.forward
-        model.forward = self.pre_forward_hook
+        self.original_forward_func = model.module.forward
+        model.module.forward = self.pre_forward_hook
         
         # Inject our main function after the model's final layer
-        final_layer = KNNWrapper.get_model_last_layer(model.config.model_type)(model)
+        final_layer = KNNWrapper.get_model_last_layer(model.module.config.model_type)(model)
         self.register_hook(final_layer, self.post_forward_hook)
 
-        keys_vals_prefix = get_dstore_path(self.dstore_dir, model.config.model_type, self.dstore_size, self.dimension)
+        keys_vals_prefix = get_dstore_path(self.dstore_dir, model.module.config.model_type, self.dstore_size, self.dimension)
         keys_filename = f'{keys_vals_prefix}_keys.npy'
         vals_filename = f'{keys_vals_prefix}_vals.npy'
         if os.path.exists(keys_filename) and os.path.exists(vals_filename):
@@ -370,14 +375,14 @@ class KNNSaver(object):
     def break_out(self):
         for h in self.hook_handles:
             h.remove()
-        if self.model is not None and self.model.broken_into is not None:
-            self.model.forward = self.original_forward_func
-            self.model.broken_into = None
+        if self.model is not None and self.model.module.broken_into is not None:
+            self.model.module.forward = self.original_forward_func
+            self.model.module.broken_into = None
 
     def build_index(self, num_keys_to_add_at_a_time=1000000, 
             ncentroids=4096, seed=1, code_size=64, probe=32):
         logger.info('Building index')
-        index_name = get_index_path(self.dstore_dir, self.model.config.model_type, self.dstore_size, self.dimension) 
+        index_name = get_index_path(self.dstore_dir, self.model.module.config.model_type, self.dstore_size, self.dimension) 
         
         while self.dstore_size<ncentroids:
             ncentroids=ncentroids//2
