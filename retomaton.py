@@ -187,7 +187,7 @@ class RetomatonWrapper(KNNWrapper):
             logger.info(f'Lookups saved: {saved*100}%')
 
     def cluster_dstore(self, num_clusters, sample_size, model, batch_size=500000):
-        keys_vals_prefix = get_dstore_path(self.dstore_dir, model.module.config.model_type, self.dstore_size, self.dimension)
+        keys_vals_prefix = get_dstore_path(self.dstore_dir, model.config.model_type, self.dstore_size, self.dimension)
         keys = np.memmap(f'{keys_vals_prefix}_keys.npy', dtype=np.float16, mode='r', shape=(self.dstore_size, self.dimension))
 
         if sample_size > self.dstore_size:
@@ -239,7 +239,7 @@ class RetomatonWrapper(KNNWrapper):
         members_sp = sp.csr_matrix(([1]*len(row_ind), (row_ind, col_ind)))
 
         members_filename = get_members_path(self.dstore_dir, 
-            model.module.config.model_type, self.dstore_size, self.dimension,
+            model.config.model_type, self.dstore_size, self.dimension,
             sample_size, num_clusters)
         with open(members_filename, 'wb') as f:
             pickle.dump(members_sp, f)

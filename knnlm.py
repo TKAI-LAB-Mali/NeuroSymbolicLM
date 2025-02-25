@@ -8,6 +8,8 @@ from torch import nn
 from enum import Enum, auto
 from pathlib import Path
 
+import gc
+
 import faiss
 import faiss.contrib.torch_utils
 
@@ -38,15 +40,17 @@ class KEY_TYPE(Enum):
             raise ValueError()
 
 class KNNWrapper(object):
-    def __init__(self, dstore_size, dstore_dir, dimension, 
+    def __init__(self, dstore_size, dstore_damb, dstore_dir, dimension, 
             knn_sim_func=None, knn_keytype=None,
             no_load_keys=False, move_dstore_to_mem=False, knn_gpu=True,
             recompute_dists = False,
-            k=1024, lmbda=0.25, knn_temp=1.0, probe=32):
+            k=1024, lmbda1=0.25, lmbda2=0.1, knn_temp=1.0, probe=32):
         self.dstore_size = dstore_size
+        self.dstore_damb = dstore_damb
         self.dstore_dir = dstore_dir
         self.dimension = dimension
-        self.lmbda = lmbda
+        self.lmbda1 = lmbda1
+        self.lmbda2 = lmbda2
         self.k = k
         self.knn_temperature = knn_temp
         self.probe = probe
@@ -59,6 +63,10 @@ class KNNWrapper(object):
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.prompt_input_ids = None
+
+        self.gpt_keys = None
+        self.gpt_vals = None
+
         self.keys = None
         self.values = None
         self.prompt_attention_mask = None
@@ -74,13 +82,77 @@ class KNNWrapper(object):
         }
         self.dist_func = dist_type_to_dist_func[knn_sim_func] # l2 or dot product function
 
+    def cleanup_dstore(self):
+        logger.info(f'cleanup previous dstores')
+        for attr in ['keys', 'vals']:
+            if hasattr(self, attr):
+                delattr(self, attr)
 
-    def setup_faiss(self):
+        torch.cuda.empty_cache()
+        gc.collect()
+    '''
+    def gpt_faiss(self):
         if not self.dstore_dir:
             raise ValueError('Cannot build a datastore without the data.')
 
         start = time.time()
-        index_name = get_index_path(self.dstore_dir, self.model.module.config.model_type, self.dstore_size, self.dimension) 
+        index_name = get_index_path('checkpoints/gpt2-large', 'gpt2', '116988150', '1280', None) 
+        logger.info(f'Dstore path: {index_name}')
+        cpu_gpt_index = faiss.read_index(index_name, faiss.IO_FLAG_ONDISK_SAME_DIR)
+        logger.info(f'Reading datastore took {time.time() - start} s')
+        cpu_gpt_index.nprobe = self.probe
+
+        if self.knn_gpu:
+            start = time.time()
+            co = faiss.GpuClonerOptions()
+            co.useFloat16 = True
+            gpu_gpt_index = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), 0, cpu_gpt_index, co)
+            logger.info(f'Moving index to GPU took {time.time() - start} s')
+        else:
+            gpu_gpt_index = cpu_gpt_index
+
+        # make_direct_map() allows calling reconstruct(n), 
+        # and reconstructing key vectors given their ids
+        # currently, this is implemented only for CPU indexes:
+        # https://github.com/facebookresearch/faiss/issues/2181
+        cpu_gpt_index.make_direct_map()
+
+        keys_vals_prefix = get_dstore_path(self.dstore_dir, self.model.config.model_type, self.dstore_size, self.dimension, self.dstore_damb)
+        if not self.no_load_keys:
+            self.gpt_keys = np.memmap(f'{keys_vals_prefix}_keys.npy', dtype=np.float16, mode='r',
+                                  shape=(self.dstore_size, self.dimension))
+        self.gpt_vals = np.memmap(f'{keys_vals_prefix}_vals.npy', dtype=np.int32, mode='r',
+                              shape=(self.dstore_size, 1))
+        # self.vals = torch.from_numpy(self.vals).to(self.device)
+
+        # If you wish to load all the keys into memory
+        # CAUTION: Only do this if your RAM can handle it!
+        if self.move_dstore_to_mem:
+            logger.info('Loading to memory...')
+            start = time.time()
+
+            if not self.no_load_keys:
+                del self.gpt_keys
+                self.keys_from_memmap = np.memmap(f'{keys_vals_prefix}_keys.npy', 
+                    dtype=np.float16, mode='r', shape=(self.dstore_size, self.dimension))
+                self.gpt_keys = self.keys_from_memmap[:].astype(np.float16)
+
+            del self.gpt_vals
+            vals_from_memmap = np.memmap(f'{keys_vals_prefix}_vals.npy', dtype=np.int32, mode='r', shape=(self.dstore_size, 1))
+            self.gpt_vals = torch.from_numpy(vals_from_memmap[:]).long().to(self.device)
+            del vals_from_memmap
+            logger.info('Loading to memory took {} s'.format(time.time() - start))
+
+        return cpu_gpt_index, gpu_gpt_index
+    '''
+    def setup_faiss(self):
+        if not self.dstore_dir:
+            raise ValueError('Cannot build a datastore without the data.')
+
+        self.cleanup_dstore()
+
+        start = time.time()
+        index_name = get_index_path(self.dstore_dir, self.model.config.model_type, self.dstore_size, self.dimension, self.dstore_damb) 
         cpu_index = faiss.read_index(index_name, faiss.IO_FLAG_ONDISK_SAME_DIR)
         logger.info(f'Reading datastore took {time.time() - start} s')
         cpu_index.nprobe = self.probe
@@ -100,7 +172,7 @@ class KNNWrapper(object):
         # https://github.com/facebookresearch/faiss/issues/2181
         cpu_index.make_direct_map()
 
-        keys_vals_prefix = get_dstore_path(self.dstore_dir, self.model.module.config.model_type, self.dstore_size, self.dimension)
+        keys_vals_prefix = get_dstore_path(self.dstore_dir, self.model.config.model_type, self.dstore_size, self.dimension, self.dstore_damb)
         if not self.no_load_keys:
             self.keys = np.memmap(f'{keys_vals_prefix}_keys.npy', dtype=np.float16, mode='r',
                                   shape=(self.dstore_size, self.dimension))
@@ -130,29 +202,34 @@ class KNNWrapper(object):
 
     def break_into(self, model):
         self.model = model
-        model.module.broken_into = True
-        self.reconstruct_index, self.index = self.setup_faiss()
-        self.is_encoder_decoder = model.module.config.is_encoder_decoder
+        model.broken_into = True
+        # self.reconstruct_index, self.index = self.setup_faiss()
+        # self.gpt_reconstruct_index, self.gpt_index = self.gpt_faiss()
+        self.is_encoder_decoder = model.config.is_encoder_decoder
 
         # Inject our pre_forward_hook to capture the labels at every forward pass
-        self.original_forward_func = model.module.forward
-        model.module.forward = self.pre_forward_hook
+        self.original_forward_func = model.forward
+        model.forward = self.pre_forward_hook
         
         # Inject our activation_capturer to capture the activations at every forward pass
-        layer_to_capture_fn, capture_input = KNNWrapper.model_layer_to_capture[model.module.config.model_type][self.knn_keytype]
+        layer_to_capture_fn, capture_input = KNNWrapper.model_layer_to_capture[model.config.model_type][self.knn_keytype]
         layer_to_capture = layer_to_capture_fn(model)
         self.activation_capturer = ActivationCapturer(layer_to_capture, capture_input=capture_input)
         self.register_hook(layer_to_capture, self.activation_capturer)
 
         # Inject our main function after the model's final layer
-        final_layer = KNNWrapper.get_model_last_layer(model.module.config.model_type)(model)
+        final_layer = KNNWrapper.get_model_last_layer(model.config.model_type)(model)
         self.register_hook(final_layer, self.post_forward_hook)
         self.vocab_size = final_layer.out_features
 
-    def get_knns(self, queries):
+    def get_knns(self, queries, store):
         if not self.knn_gpu:
             queries = queries.cpu()
-        dists, knns = self.index.search(queries, self.k)
+        if store:
+            dists, knns = self.index.search(queries, self.k)
+        else:
+            print(queries.shape)
+            dists, knns = self.gpt_index.search(queries.reshape(-1, 1280), self.k)
         dists, knns = dists.to(self.device), knns.to(self.device)
         return dists, knns
 
@@ -181,15 +258,33 @@ class KNNWrapper(object):
         lm_logits = lm_logits[nonpad_mask]
         queries = queries[nonpad_mask] # (nonpad, dim)
         
-        dists, knns = self.get_knns(queries) # (nonpad batch * time, k)
+        dists, knns = self.get_knns(queries, True) # (nonpad batch * time, k)
+            
         if self.recompute_dists:
             knns_vecs = torch.from_numpy(self.keys[knns]).to(self.device)
             dists = self.dist_func(queries, knns_vecs) 
         
         neg_dists = -dists
         knn_log_probs, _ = self.knns_to_log_prob(knns, neg_dists)
-        
-        interpolated_scores = KNNWrapper.interpolate(knn_log_probs, lm_logits, self.lmbda) # (nonpad, vocab)
+
+        if self.gpt_keys:
+            gpt_dists, gpt_knns = self.get_knns(queries, False)
+
+            if self.recompute_dists:
+                gpt_knns_vecs = torch.from_numpy(self.gpt_keys[knns]).to(self.device)
+                gpt_dists = self.dist_func(queries, gpt_knns_vecs) 
+            
+            gpt_neg_dists = -gpt_dists
+            gpt_knn_log_probs, _ = self.knns_to_log_prob(gpt_knns, gpt_neg_dists)
+
+            dist = min(dists)
+            gpt_dist = min(gpt_dists)
+            if dist<=gpt_dist:
+                interpolated_scores = KNNWrapper.interpolate(knn_log_probs, gpt_knn_log_probs, lm_logits, self.lmbda1, self.lmbda2)
+            else:
+                interpolated_scores = KNNWrapper.interpolate(knn_log_probs, gpt_knn_log_probs, lm_logits, self.lmbda2, self.lmbda1)
+        else:
+            interpolated_scores = KNNWrapper.interpolate(knn_log_probs, None, lm_logits, self.lmbda1, self.lmbda2) # (nonpad, vocab)
         output[nonpad_mask] = interpolated_scores
         return output 
 
@@ -208,9 +303,9 @@ class KNNWrapper(object):
     def break_out(self):
         for h in self.hook_handles:
             h.remove()
-        if self.model is not None and self.model.module.broken_into is not None:
-            self.model.module.forward = self.original_forward_func
-            self.model.module.broken_into = None
+        if self.model is not None and self.model.broken_into is not None:
+            self.model.forward = self.original_forward_func
+            self.model.broken_into = None
     
     def get_metrics(self):
         return {}
@@ -231,10 +326,16 @@ class KNNWrapper(object):
 
 
     @staticmethod
-    def interpolate(knn_log_probs, lm_log_probs, lmbda):
-        interpolated = torch.logaddexp(
-            lm_log_probs + np.log(1 - lmbda), 
-            knn_log_probs + np.log(lmbda))
+    def interpolate(knn_log_probs, gpt_knn_log_probs, lm_log_probs, lmbda1, lmbda2):
+        if gpt_knn_log_probs:
+            interpolated = torch.logaddexp(
+                lm_log_probs + np.log(1 - lmbda1 - lmbda2), 
+                knn_log_probs + np.log(lmbda1),
+                gpt_knn_log_probs + np.log(lmbda2))
+        else:
+            interpolated = torch.logaddexp(
+                lm_log_probs + np.log(1 - lmbda1), 
+                knn_log_probs + np.log(lmbda1))
 
         return interpolated
 
@@ -242,47 +343,43 @@ class KNNWrapper(object):
     def get_model_last_layer(model_type):
         # works for gpt2, marian, t5. If a model does not have an ".lm_head" layer, 
         # add an "if model_type is ..." statement here, and return the output embedding layer
-        return lambda model: model.module.lm_head
+        return lambda model: model.lm_head
 
     @staticmethod
     def get_model_embedding_layer(model_type):
         if model_type.startswith('gpt2'):
-            return lambda model: model.module.transformer.wte
+            return lambda model: model.transformer.wte
 
     # For every model name and key type, returns a lambda that returns the relevant layer in the model, 
     # and whether the input of that layer should be captured (True) or the output (False)
     model_layer_to_capture = {
         'llama': {
-<<<<<<< HEAD
             KEY_TYPE.last_ffn_input: (lambda model: model.base_model.layers[-1].mlp, True),
             KEY_TYPE.last_ffn_output: (lambda model: model.base_model.layers[-1], False), 
-=======
-            KEY_TYPE.last_ffn_input: (lambda model: model.module.base_model.layers[-1].mlp, True), #fetches fisrt fully connected layer from the last decoder layer of the model
-            KEY_TYPE.last_ffn_output: (lambda model: model.module.base_model.layers[-1], False), # fetches entire last decoder layer
->>>>>>> origin/main
         },
         'bart': {
-            KEY_TYPE.last_ffn_input: (lambda model: model.module.base_model.decoder.layers[-1].fc1, True),
-            KEY_TYPE.last_ffn_output: (lambda model: model.module.base_model.decoder.layers[-1], False),
+            KEY_TYPE.last_ffn_input: (lambda model: model.base_model.decoder.layers[-1].fc1, True),
+            KEY_TYPE.last_ffn_output: (lambda model: model.base_model.decoder.layers[-1], False),
         },
         'gpt2': {
-            KEY_TYPE.last_ffn_input: (lambda model: model.module.base_model.h[-1].mlp, True),
-            KEY_TYPE.last_ffn_output: (lambda model: model.module.base_model.h[-1], False),
+            KEY_TYPE.last_ffn_input: (lambda model: model.base_model.h[-1].mlp, True),
+            KEY_TYPE.last_ffn_output: (lambda model: model.base_model.h[-1], False),
         },
         'marian': {
-            KEY_TYPE.last_ffn_input: (lambda model: model.module.base_model.decoder.layers[-1].fc1, True),
-            KEY_TYPE.last_ffn_output: (lambda model: model.module.base_model.decoder.layers[-1], False),
+            KEY_TYPE.last_ffn_input: (lambda model: model.base_model.decoder.layers[-1].fc1, True),
+            KEY_TYPE.last_ffn_output: (lambda model: model.base_model.decoder.layers[-1], False),
         },
         't5': {
-            KEY_TYPE.last_ffn_input: (lambda model: model.module.base_model.decoder.block[-1].layer[2].DenseReluDense, True),
-            KEY_TYPE.last_ffn_output: (lambda model: model.module.base_model.decoder.block[-1].layer[2], False),
+            KEY_TYPE.last_ffn_input: (lambda model: model.base_model.decoder.block[-1].layer[2].DenseReluDense, True),
+            KEY_TYPE.last_ffn_output: (lambda model: model.base_model.decoder.block[-1].layer[2], False),
         }
 }
     
 
 class KNNSaver(object):
-    def __init__(self, dstore_size, dstore_dir, dimension, knn_keytype=None):
+    def __init__(self, dstore_size, dstore_damb, dstore_dir, dimension, knn_keytype=None):
         self.dstore_size = dstore_size
+        self.dstore_damb = dstore_damb
         self.dstore_dir = dstore_dir
         self.dimension = dimension
         self.knn_keytype = KEY_TYPE.last_ffn_input if knn_keytype is None else knn_keytype
@@ -303,24 +400,24 @@ class KNNSaver(object):
 
     def break_into(self, model):
         self.model = model
-        model.module.broken_into = True
-        self.is_encoder_decoder = model.module.config.is_encoder_decoder
+        model.broken_into = True
+        self.is_encoder_decoder = model.config.is_encoder_decoder
         
         # Inject our activation_capturer to capture the activations at every forward pass
-        layer_to_capture_fn, capture_input = KNNWrapper.model_layer_to_capture[model.module.config.model_type][self.knn_keytype]
+        layer_to_capture_fn, capture_input = KNNWrapper.model_layer_to_capture[model.config.model_type][self.knn_keytype]
         layer_to_capture = layer_to_capture_fn(model)
         self.activation_capturer = ActivationCapturer(layer_to_capture, capture_input=capture_input)
         self.register_hook(layer_to_capture, self.activation_capturer)
 
         # Inject our pre_forward_hook to capture the labels at every forward pass
-        self.original_forward_func = model.module.forward
-        model.module.forward = self.pre_forward_hook
+        self.original_forward_func = model.forward
+        model.forward = self.pre_forward_hook
         
         # Inject our main function after the model's final layer
-        final_layer = KNNWrapper.get_model_last_layer(model.module.config.model_type)(model)
+        final_layer = KNNWrapper.get_model_last_layer(model.config.model_type)(model)
         self.register_hook(final_layer, self.post_forward_hook)
 
-        keys_vals_prefix = get_dstore_path(self.dstore_dir, model.module.config.model_type, self.dstore_size, self.dimension)
+        keys_vals_prefix = get_dstore_path(self.dstore_dir, model.config.model_type, self.dstore_size, self.dimension, self.dstore_damb)
         keys_filename = f'{keys_vals_prefix}_keys.npy'
         vals_filename = f'{keys_vals_prefix}_vals.npy'
         if os.path.exists(keys_filename) and os.path.exists(vals_filename):
@@ -375,18 +472,23 @@ class KNNSaver(object):
     def break_out(self):
         for h in self.hook_handles:
             h.remove()
-        if self.model is not None and self.model.module.broken_into is not None:
-            self.model.module.forward = self.original_forward_func
-            self.model.module.broken_into = None
+        if self.model is not None and self.model.broken_into is not None:
+            self.model.forward = self.original_forward_func
+            self.model.broken_into = None
 
     def build_index(self, num_keys_to_add_at_a_time=1000000, 
-            ncentroids=4096, seed=1, code_size=64, probe=32):
+            ncentroids=256, seed=1, code_size=64, probe=32):
+        ncentroids = 256
         logger.info('Building index')
-        index_name = get_index_path(self.dstore_dir, self.model.module.config.model_type, self.dstore_size, self.dimension) 
-        
-        while self.dstore_size<ncentroids:
-            ncentroids=ncentroids//2
+        index_name = get_index_path(self.dstore_dir, self.model.config.model_type, self.dstore_size, self.dimension, self.dstore_damb) 
+        print(self.dstore_size, ncentroids)
+        while self.dstore_size < ncentroids:
+            ncentroids = ncentroids//2
+        logger.info(f'ncentroids: {ncentroids}')
 
+        if self.dstore_size < 256:
+            
+        
         # Initialize faiss index
         quantizer = faiss.IndexFlatL2(self.dimension)
         index = faiss.IndexIVFPQ(quantizer, self.dimension,
@@ -395,7 +497,8 @@ class KNNSaver(object):
 
         logger.info('Training Index')
         np.random.seed(seed)
-        random_sample = np.random.choice(np.arange(self.dstore_vals.shape[0]), size=[min(1000000, self.dstore_vals.shape[0])], replace=False)
+        random_sample = np.random.choice(np.arange(self.dstore_vals.shape[0]), size=[min(ncentroids, self.dstore_vals.shape[0])], replace=False)
+        print(len(random_sample))
         start = time.time()
         # Faiss does not handle adding keys in fp16 as of writing this.
         index.train(self.dstore_keys[random_sample].astype(np.float32))
@@ -442,8 +545,14 @@ class ActivationCapturer(nn.Module):
             self.captured = output.detach()
 
 
-def get_dstore_path(dstore_dir, model_type, dstore_size, dimension):
-    return f'{dstore_dir}/dstore_{model_type}_{dstore_size}_{dimension}'
+def get_dstore_path(dstore_dir, model_type, dstore_size, dimension, dstore_damb):
+    if dstore_damb is None:
+        return f'{dstore_dir}/dstore_{model_type}_{dstore_size}_{dimension}'
+    else:
+        return f'{dstore_dir}/dstore_{model_type}_{dstore_size}_{dimension}_{dstore_damb}'
 
-def get_index_path(dstore_dir, model_type, dstore_size, dimension):
-    return f'{dstore_dir}/index_{model_type}_{dstore_size}_{dimension}.indexed'
+def get_index_path(dstore_dir, model_type, dstore_size, dimension, dstore_damb):
+    if dstore_damb is None:
+        return f'{dstore_dir}/index_{model_type}_{dstore_size}_{dimension}.indexed'
+    else:
+        return f'{dstore_dir}/index_{model_type}_{dstore_size}_{dimension}_{dstore_damb}.indexed'

@@ -42,6 +42,8 @@ import csv
 import datasets
 from datasets import load_dataset
 from tqdm import tqdm
+import pickle
+import pandas as pd
 
 import transformers
 from transformers import (
@@ -223,6 +225,7 @@ class KNNArguments:
     knn: bool = field(default=False)
     knn_gpu: bool = field(default=True)
     dstore_size: int = field(default=None, metadata={"help": "The size of the dstore."})
+    dstore_damb: int = field(default=None, metadata={"help": "For the name of the dstore(avoiding ambuiguity)."})
     knn_keytype: KEY_TYPE.from_string = field(default=KEY_TYPE.last_ffn_input)
     save_knnlm_dstore: bool = field(default=False)
     dstore_dir: str = field(default="checkpoints")
@@ -535,25 +538,57 @@ def main():
             )
         block_size = min(data_args.block_size, tokenizer.model_max_length)
 
-    dstore_sizes = []
+    dstore_path = knn_args.dstore_dir + '/0file.pkl'
+    with open(dstore_path, 'rb') as file:
+        dstore_sizes = pickle.load(file)
+    print(len(dstore_sizes))
+    # [(19455, None), (21503, None), (14335, None), (17407, None), (20479, None), (2047, None), (25599, None), (519, None), (5119, None), (20479, 1), (15359, None), (682, None), (18431, None), (3071, None), (1023, None), (4095, None), (4095, 1), (2047, 1), (17407, 1), (16383, None), (14335, 1), (8191, None), (29695, None), (893, None), (6143, None), (11263, None), (2047, 2), (69631, None), (23551, None), (7167, None), (10239, None), (6143, 1), (6143, 2), (978, None), (26623, None), (19455, 1), (499, None), (3071, 1), (3071, 2), (11263, 1), (20479, 2), (13311, None), (460, None), (17407, 2), (9215, None), (16383, 1), (9215, 1), (13311, 1), (5119, 1), (1023, 1), (11263, 2), (13311, 2), (30719, None), (26623, 1), (5119, 2), (7167, 1), (5119, 3), (4095, 2), (5119, 4), (36863, None), (3071, 3), (50175, None), (38911, None), (23551, 1), (17407, 3), (24575, None), (46079, None), (27647, None), (29695, 1), (17407, 4), (19455, 2), (2047, 3), (7167, 2), (932, None), (24575, 1), (6143, 3), (11263, 3), (9215, 2), (6143, 4), (3071, 4), (26623, 2), (11263, 4), (10239, 1), (8191, 1), (1023, 2), (30719, 1), (8191, 2), (4095, 3), (12287, None), (7167, 3), (11263, 5), (5119, 5), (10239, 2), (12287, 1), (2047, 4), (4095, 4), (13311, 3), (9215, 3), (21503, 1), (19455, 3), (15359, 1), (10239, 3), (11263, 6), (11263, 7), (9215, 4), (39935, None), (8191, 3), (36863, 1), (14335, 2), (7167, 4), (13311, 4), (14335, 3), (22527, None), (16383, 2), (8191, 4), (16383, 3), (2047, 5), (20479, 3), (6143, 5), (11263, 8), (48127, None), (23551, 2), (13311, 5), (10239, 4), (24575, 2), (31743, None), (9215, 5), (16383, 4), (7167, 5), (2047, 6), (17407, 5), (1023, 3), (1023, 4), (13311, 6), (1023, 5), (9215, 6), (6143, 6), (1023, 6), (11263, 9), (1023, 7), (16383, 5), (5119, 6), (29695, 2), (30719, 2), (43007, None), (1023, 8), (8191, 5), (17407, 6), (2047, 7), (6143, 7), (1023, 9), (14335, 4), (1023, 10), (1023, 11), (1023, 12), (22527, 1), (9215, 7), (30719, 3), (1023, 13), (11263, 10), (5119, 7), (18431, 1), (5119, 8), (34815, None), (3071, 5), (13311, 7), (9215, 8), (7167, 6), (2047, 8), (6143, 8), (462, None), (1023, 14), (8191, 6), (795, None), (7167, 7), (5119, 9), (35839, None), (9215, 9), (6143, 9), (4095, 5), (43007, 1), (5119, 10), (10239, 5), (8191, 7), (632, None), (8191, 8), (6143, 10), (19455, 4), (1023, 15), (2047, 9), (4095, 6), (11263, 11), (18431, 2), (14335, 5), (16383, 6), (13311, 8), (10239, 6), (10239, 7), (7167, 8), (6143, 11), (2047, 10), (21503, 2), (8191, 9), (32767, None), (31743, 1), (10239, 8), (368, None), (4095, 7), (3071, 6), (18431, 3), (6143, 12), (5119, 11), (2047, 11), (685, None), (11263, 12), (2047, 12), (1023, 16), (4095, 8), (9215, 10), (12287, 2), (27647, 1), (10239, 9), (1023, 17), (2047, 13), (11263, 13), (2047, 14), (16383, 7), (19455, 5), (581, None), (7167, 9), (14335, 6), (13311, 9), (9215, 11), (4095, 9), (886, None), (12287, 3), (9215, 12), (4095, 10), (870, None), (7167, 10), (2047, 15), (64511, None), (3071, 7), (18431, 4), (6143, 13), (12287, 4), (15359, 2), (9215, 13), (13311, 10), (10239, 10), (4095, 11), (38911, 1), (29695, 3), (7167, 11), (9215, 14), (2047, 16), (19455, 6), (615, None), (9215, 15), (15359, 3), (24575, 3), (4095, 12), (14335, 7), (7167, 12), (2047, 17)]
+    # [(19455, None), (21503, None), (14335, None), (17407, None), (20479, None), (2047, None), (25599, None), (519, None), (5119, None)]
+    # [19455, 21503, 14335, 17407, 20479, 2047, 25599, 519, 5119, 20480, 15359, 682, 18431, 3071, 1023, 4095, 4096, 2048, 17408, 16383, 14336, 8191, 29695, 893, 6143, 11263, 2049, 69631, 23551, 7167, 10239, 6144, 6145, 978, 26623, 19456, 499, 3072, 3073, 11264, 20481, 13311, 460, 17409, 9215, 16384, 9216, 13312, 5120, 1024, 11265, 13313, 30719, 26624, 5121, 7168, 5122, 4097, 5123, 36863, 3074, 50175, 38911, 23552, 17410, 24575, 46079, 27647, 29696, 17411, 19457, 2050, 7169, 932, 24576, 6146, 11266, 9217, 6147, 3075, 26625, 11267, 10240, 8192, 1025, 30720, 8193, 4098, 12287, 7170, 11268, 5124, 10241, 12288, 2051, 4099, 13314, 9218, 21504, 19458, 15360, 10242, 11269, 11270, 9219, 39935, 8194, 36864, 14337, 7171, 13315, 14338, 22527, 16385, 8195, 16386, 2052, 20482, 6148, 11271, 48127, 23553, 13316, 10243, 24577, 31743, 9220, 16387, 7172, 2053, 17412, 1026, 1027, 13317, 1028, 9221, 6149, 1029, 11272, 1030, 16388, 5125, 29697, 30721, 43007, 1031, 8196, 17413, 2054, 6150, 1032, 14339, 1033, 1034, 1035, 22528, 9222, 30722, 1036, 11273, 5126, 18432, 5127, 34815, 3076, 13318, 9223, 7173, 2055, 6151, 462, 1037, 8197, 795, 7174, 5128, 35839, 9224, 6152, 4100, 43008, 5129, 10244, 8198, 632, 8199, 6153, 19459, 1038, 2056, 4101, 11274, 18433, 14340, 16389, 13319, 10245, 10246, 7175, 6154, 2057, 21505, 8200, 32767, 31744, 10247, 368, 4102, 3077, 18434, 6155, 5130, 2058, 685, 11275, 2059, 1039, 4103, 9225, 12289, 27648, 10248, 1040, 2060, 11276, 2061, 16390, 19460, 581, 7176, 14341, 13320, 9226, 4104, 886, 12290, 9227, 4105, 870, 7177, 2062, 64511, 3078, 18435, 6156, 12291, 15361, 9228, 13321, 10249, 4106, 38912, 29698, 7178, 9229, 2063, 19461, 615, 9230, 15362, 24578, 4107, 14342, 7179, 2064]
     #[30719, 5119, 790, -1, 19455, 34815, 2047, -1, -1, 13311, 4095, 17407, 1023, 9215, 6143, 18431, 15359, 27647, -1, 3071, -1, 46079, -1, 591, -1, 39935, 28671, -1, -1, 47103, 14335, -1, 8191, -1, -1, -1, -1, 16383, 712, -1, 35839, 33791, 10239, -1, -1, -1, -1, -1, -1, 11263]
 
+    logger.info(f'Fetching duplicates')
+    df = pd.DataFrame(raw_datasets['latest'])
+    context = df['wiki_context']
+    duplicates = context[context.duplicated()].index
+    dups = [0]*raw_datasets['latest'].num_rows
+    df["context_length"] = df["wiki_context"].apply(len)
+    for row in duplicates:
+        cont = raw_datasets['latest'][row]['wiki_context']
+        eqlen = df[df['context_length']==len(cont)]
+        # ind = eqlen[eqlen['wiki_context'].eq(cont)].index
+        ind = eqlen[eqlen['wiki_context'].apply(lambda x: x == cont)].index
+        # print(ind.tolist())
+        # break
+        dups[row] = ind.tolist()[0]
+
     raw = copy.deepcopy(raw_datasets)
-    for rituind in range(0,50):
-        print(dstore_sizes)
+    for rituind in tqdm(range(len(dstore_sizes), raw[data_args.eval_subset].num_rows), desc='Local Dstore'):
+        logger.info(f'{len(dstore_sizes), rituind}')
+        if dups[rituind]!=0:
+            dstore_sizes.append(dstore_sizes[dups[rituind]])
+            logger.info(f'Duplicate found - {dstore_sizes[dups[rituind]]}! Skipping')
+            with open(dstore_path, 'wb') as file:
+                pickle.dump(dstore_sizes, file)
+            continue
+
         # if dstore_sizes[rituind] != -1:
         #     continue
         knn_args.dstore_size = None
+        knn_args.dstore_damb = None
         if knn_args.build_index or knn_args.save_knnlm_dstore or knn_args.cluster_dstore or training_args.do_eval:
             # print(raw_datasets["validation"]["context"])
             
             # datastats = datasetStats()
             # datastats.stats(raw_datasets[data_args.eval_subset]["ip_question"], "wholeIP"+data_args.eval_subset+".png")
-            seed = 89
-            sample_size = min(50, raw_datasets[data_args.eval_subset].num_rows)
-            shuffled_dataset = raw_datasets[data_args.eval_subset].shuffle(seed=seed)
-            sampled_dataset = shuffled_dataset.select([rituind])
-            raw[data_args.eval_subset] = sampled_dataset
+            # seed = 89
+            # sample_size = min(50, raw_datasets[data_args.eval_subset].num_rows)
+            # shuffled_dataset = raw_datasets[data_args.eval_subset].shuffle(seed=seed)
+            # sampled_dataset = shuffled_dataset.select([rituind])
+            # raw[data_args.eval_subset] = sampled_dataset
+
+            raw[data_args.eval_subset] = raw_datasets[data_args.eval_subset].select([rituind])
+
             # print(raw_datasets[data_args.eval_subset].num_rows)
             # datastats.stats(raw_datasets[data_args.eval_subset]["ip_question"], "sampleIP"+data_args.eval_subset+".png")
 
@@ -601,9 +636,15 @@ def main():
             if knn_args.dstore_size is None and split == data_args.eval_subset:
                 knn_args.dstore_size = total_eval_tokens
             print('Dstore size: ', knn_args.dstore_size)
-        while knn_args.dstore_size in dstore_sizes:
-            knn_args.dstore_size+=1
-        dstore_sizes[rituind] = knn_args.dstore_size
+        if knn_args.dstore_size < 256:
+            dstore_sizes.append((None, None))
+            continue
+        while (knn_args.dstore_size, knn_args.dstore_damb) in dstore_sizes:
+            if knn_args.dstore_damb is None:
+                knn_args.dstore_damb = 1
+                continue
+            knn_args.dstore_damb+=1
+        dstore_sizes.append((knn_args.dstore_size,knn_args.dstore_damb))
 
         if training_args.do_train:
             if "train" not in tokenized_datasets:
@@ -633,7 +674,7 @@ def main():
         )
 
         if knn_args.retomaton or knn_args.cluster_dstore:
-            knn_wrapper = RetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
+            knn_wrapper = RetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_damb = knn_args.dstore_damb, dstore_dir=knn_args.dstore_dir, 
                 dimension=dimension, 
                 knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
                 no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
@@ -642,14 +683,14 @@ def main():
                 no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
                 members=knn_args.members)
         elif knn_args.knn:
-            knn_wrapper = KNNWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
+            knn_wrapper = KNNWrapper(dstore_size=knn_args.dstore_size, dstore_damb = knn_args.dstore_damb, dstore_dir=knn_args.dstore_dir, 
                 dimension= dimension, 
                 knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
                 no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
                 recompute_dists=knn_args.recompute_dists,
                 k=knn_args.k, lmbda=knn_args.lmbda, knn_temp=knn_args.knn_temp, probe=knn_args.probe)
         elif knn_args.save_knnlm_dstore or knn_args.build_index:
-            knn_wrapper = KNNSaver(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
+            knn_wrapper = KNNSaver(dstore_size=knn_args.dstore_size, dstore_damb = knn_args.dstore_damb, dstore_dir=knn_args.dstore_dir, 
                 dimension=dimension, knn_keytype=knn_args.knn_keytype)
         
         if knn_wrapper is not None:
@@ -707,7 +748,12 @@ def main():
         
         if knn_wrapper is not None:
             knn_wrapper.break_out()
-    print(dstore_sizes)
+        # print(dstore_sizes)
+        # dstore_path = knn_args.dstore_dir + '/0file.pkl'
+        with open(dstore_path, 'wb') as file:
+            pickle.dump(dstore_sizes, file)
+    
+
     
 if __name__ == "__main__":
     main()
