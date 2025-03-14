@@ -1,0 +1,48 @@
+time,model,dataset,retomaton,knn,lambda,block_size,k,knn_temp,max_new_tokens,dstore_size,exact_match,notes
+2025-02-15_23:50:10,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,False,0.25,512,1024,1.0,12,0,44.0,Sentence to json
+2025-02-15_23:51:33,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,False,0.25,512,1024,1.0,12,0,46.0,Sentence to json
+2025-02-17_15:01:24,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,512,1024,1.0,12,591,46.0,Sentence to json
+2025-02-17_15:06:48,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,512,512,1.0,12,591,46.0,k
+2025-02-17_15:16:01,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.1,512,512,1.0,12,591,44.0,k and lambda
+2025-02-17_15:22:09,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.3,512,512,1.0,12,591,44.0,k and lambda
+2025-02-17_15:26:55,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,512,256,1.0,12,591,46.0,Sentence to json
+2025-02-17_15:41:32,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,512,1024,0.8,12,591,46.0,Sentence to json
+2025-02-18_10:56:53,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,512,1024,1.0,12,519,38.0,Sentence to json
+2025-02-18_11:07:14,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.3,512,1024,1.0,12,8350,36.0,Sentence to json
+2025-02-18_11:19:49,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,512,1024,1.0,12,8350,48.0,Sentence to json
+2025-02-18_11:38:42,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,512,1024,0.8,12,8350,46.0,Sentence to json
+2025-02-18_12:31:31,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,512,1024,0.9,12,8350,48.0,Sentence to json
+2025-02-18_12:35:46,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.1,512,1024,0.9,12,8350,54.0,Sentence to json
+2025-02-20_19:14:15,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,False,0.25,1024,1024,1.0,64,0,0.0,direct answer generation
+2025-02-21_00:34:50,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,False,0.25,512,1024,1.0,12,0,41.7952,entire dataset Base model
+2025-02-26_14:03:57,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.1,512,1024,0.9,12,local,42.8723,entire dataset KNN model
+2025-02-26_14:07:04,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.1,512,1024,1.0,12,local,42.8723,entire dataset KNN model
+2025-02-26_18:38:50,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,512,32,1.0,12,local,43.9362,entire dataset KNN model
+2025-02-26_18:40:05,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,512,1024,1.0,12,local,43.8431,entire dataset KNN model
+2025-02-27_05:42:21,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,512,1024,0.8,12,local,43.8298,entire dataset KNN model
+2025-02-27_09:50:58,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,512,1024,1.0,12,local,39.3452,Sample
+2025-02-27_17:42:21,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.35,512,1024,1.0,12,local,44.4016,entire dataset KNN model
+2025-02-27_17:44:26,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.6,512,1024,1.0,12,local,41.9415,entire dataset KNN model
+2025-02-28_00:47:23,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.6,512,1024,1.0,12,local,41.9415,entire dataset KNN model
+2025-02-28_00:52:39,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,512,1024,1.0,12,local,43.5106,entire dataset KNN model
+2025-02-28_15:17:26,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.35,512,32,1.0,12,local,44.3617,entire dataset KNN model
+2025-02-28_15:21:52,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.4,512,1024,0.7,12,local,43.9495,entire dataset KNN model
+2025-02-28_19:48:55,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.4,512,1024,1.0,12,local,44.1223,entire dataset KNN model
+2025-02-28_19:49:21,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.4,512,32,1.0,12,local,43.8963,entire dataset KNN model
+2025-02-28_23:03:04,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,1024,1024,1.0,24,6695,24.0,sample
+2025-03-01_02:16:10,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,False,0.25,1024,1024,1.0,24,0,42.59,Base - direct answer generation
+2025-03-01_09:31:18,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,1024,1024,1.0,24,1019978,43.82,direct answer generation
+2025-03-01_15:26:43,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.35,512,64,1.0,12,local,44.1489,entire dataset KNN model
+2025-03-01_15:27:10,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.35,512,64,0.9,12,local,44.1489,entire dataset KNN model
+2025-03-01_23:57:47,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.35,1024,1024,1.0,24,1019978,43.5,direct answer generation
+2025-03-02_00:07:45,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,1024,64,1.0,24,1019978,43.58,direct answer generation
+2025-03-02_11:15:50,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,1024,1024,0.8,24,1019978,43.86,direct answer generation
+2025-03-02_11:20:41,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.2,1024,1024,1.0,24,1019978,43.94,direct answer generation
+2025-03-03_23:29:58,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,1024,1024,1.0,24,1019978,43.95,direct answer generation
+2025-03-03_23:44:44,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.1,1024,1024,1.0,24,1019978,43.56,direct answer generation
+2025-03-04_00:19:42,meta-llama/Llama-3.1-8B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,False,0.25,1024,1024,1.0,24,0,73.64,direct answer generation
+2025-03-10_12:58:48,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,1024,1024,1.0,24,120965366,24.0,sample
+2025-03-10_13:27:14,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,1024,1024,1.0,24,120965366,24.0,sample
+2025-03-11_19:12:49,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,1024,1024,1.0,24,120965366,20.0,sample
+2025-03-11_19:25:35,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,1024,1024,1.0,24,,24.0,sample
+2025-03-11_19:29:57,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,1024,1024,1.0,24,120965366,20.0,direct answer generation
