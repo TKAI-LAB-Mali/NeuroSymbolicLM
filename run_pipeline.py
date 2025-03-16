@@ -433,8 +433,8 @@ def main():
         model = AutoModelForCausalLM.from_config(config)
         n_params = sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
-
-    model.to('cuda')
+    if torch.cuda.is_available():
+        model.to('cuda')
     logger.info(f'Model assigned to {model.device}')
     
     # if torch.cuda.device_count() > 1:
@@ -465,64 +465,6 @@ def main():
         else:
             triviaq[text_column_name] = prefix + triviaq['answer1'] + sufix + quest
         return triviaq
-
-    def tokenize_function(examples):
-        # print("    ",examples[text_column_name][0])
-        with CaptureLogger(tok_logger) as cl:
-            output = tokenizer(examples[text_column_name])
-            # print(output[0])
-        # clm input could be much much longer than block_size
-        if "Token indices sequence length is longer than the" in cl.out:
-            tok_logger.warning(
-                "^^^^^^^^^^^^^^^^ Please ignore the warning above - this long input will be chunked into smaller bits before being passed to the model."
-            )
-        # print(output.keys())
-        return output
-
-    def group_texts_question(examples):
-
-        if len(examples) >= block_size:
-            logger.warning(
-                f"The block_size passed ({data_args.block_size}) is smaller than the length for the question"
-            )
-
-        input_ids = []
-        attention_mask = []
-        labels = []
-        
-        begin_loc = 0
-        end_loc = min(len(examples['input_ids']), block_size)
-        # if end_loc == block_size:
-        #     print('yes')
-        # else:
-        #     print('no')
-        cur_input_ids = examples['input_ids'][-end_loc:]
-        cur_labels = list(cur_input_ids)
-        cur_labels[:-end_loc] = [padding_index] * (len(cur_labels) - end_loc)
-        
-        attention_mask = [0] * (block_size - len(cur_input_ids)) + [1] * len(cur_labels)
-        # print(len(cur_input_ids), block_size)
-
-        if len(cur_input_ids) < block_size:
-            padding_size = block_size - len(cur_input_ids)
-            pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
-            pad_ids = [pad_token_id] * padding_size
-            pad_labels = [padding_index] * padding_size
-               
-            # cur_input_ids.append(input_ids)
-            # attention_mask.append([1] * len(cur_labels))
-            # labels.append(cur_labels)
-            pad_ids += cur_input_ids
-            pad_labels += cur_labels
-            # print("~",len(pad_ids), block_size)
-            # input_ids.append(pad_ids)
-            # labels.append(pad_labels)
-            result = {'input_ids': pad_ids, 'labels': pad_labels, 'attention_mask': attention_mask}
-        else:
-            # input_ids.append(cur_input_ids)
-            # labels.append(cur_labels)
-            result = {'input_ids': cur_input_ids, 'labels': cur_labels, 'attention_mask': attention_mask}
-        return result
 
     # sampled_quests = raw_datasets[data_args.eval_subset].select(np.random.randint(0,raw_datasets[data_args.eval_subset].num_rows-10,4))
     prefix1 = """Answer these questions:
@@ -566,25 +508,24 @@ Now here is my question:
     # prompt_quests = "Answer these questions:\nQ: Who was President when the first Peanuts cartoon was published?\nQ: Who was President when the first Peanuts cartoon was published?\nA: Harry Truman\nQ: Which American-born Sinclair won the Nobel Prize for Literature in 1930?\nQ: Which American-born Sinclair won the Nobel Prize for Literature in 1930?\nA: Sinclair Lewis\nQ: Where in England was Dame Judi Dench born?\nQ: Where in England was Dame Judi Dench born?\nA: York\nQ: William Christensen of Madison, New Jersey, has claimed to have the world's biggest collection of what?\nQ: William Christensen of Madison, New Jersey, has claimed to have the world's biggest collection of what?\nA: Beer Cans\nQ: In which decade did Billboard magazine first publish and American hit chart?\nQ: In which decade did Billboard magazine first publish and American hit chart?\nA: 30s"
     column_names = raw_datasets[data_args.eval_subset].column_names
     text_column_name = 'input_final_prompts'
-    # text_column_name = "ip_question2" if "ip_question1" in column_names else "ip_question1"
-    # print(text_column_name)
-    # with training_args.main_process_first(desc="dataset map input1"):
-    #     raw_datasets = raw_datasets.map(
-    #         format_input,
-    #         fn_kwargs={
-    #             "text_column_name": text_column_name,
-    #             "prefix": prefix1,
-    #             "sufix": sufix1
-    #         },
-    #         # batched=True,
-    #         num_proc=data_args.preprocessing_num_workers,
-    #         load_from_cache_file=not data_args.overwrite_cache,
-    #         desc="dataset map context",
-    #     )
-    # print(raw_datasets[data_args.eval_subset][20])
+    if data_args.post_process:
+        text_column_name = "ip_question2" if "ip_question1" in column_names else "ip_question1"
+        # print(text_column_name)
+        with training_args.main_process_first(desc="dataset map input1"):
+            raw_datasets = raw_datasets.map(
+                format_input,
+                fn_kwargs={
+                    "text_column_name": text_column_name,
+                    "prefix": prefix1,
+                    "sufix": sufix1
+                },
+                # batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="dataset map context",
+            )
+        # print(raw_datasets[data_args.eval_subset][20])
     column_names = raw_datasets[data_args.eval_subset].column_names
-    # print(raw_datasets[data_args.eval_subset]['question'][:5])
-    # print(prompt_quests)
 
     if data_args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -602,57 +543,6 @@ Now here is my question:
             )
         block_size = min(data_args.block_size, tokenizer.model_max_length)
 
-    if data_args.prompt:
-        # seed = 89
-        # sample_size = min(50, raw_datasets[data_args.eval_subset].num_rows)
-        # shuffled_dataset = raw_datasets[data_args.eval_subset].shuffle(seed=seed)
-        # sampled_dataset = shuffled_dataset.select(range(sample_size))
-        # raw_datasets[data_args.eval_subset] = sampled_dataset
-        # datastats = datasetStats()
-        # datastats.stats(raw_datasets[data_args.eval_subset]["ip_question"], "sampleIP"+data_args.eval_subset+".png")
-        # print(raw_datasets[data_args.eval_subset].num_rows)
-        raw_datasets[data_args.eval_subset] = raw_datasets[data_args.eval_subset].select(range(0,50))
-        # if training_args.do_train:
-        # column_names = raw_datasets[data_args.eval_subset].column_names
-        # text_column_name = "question" if "question" in column_names else column_names[0]
-        with training_args.main_process_first(desc="dataset map tokenization"):
-            tokenized_datasets = raw_datasets.map(
-                tokenize_function,
-                batched=True,
-                num_proc=data_args.preprocessing_num_workers,
-                remove_columns=column_names,
-                load_from_cache_file=not data_args.overwrite_cache,
-                desc="Running tokenizer on dataset",
-            )
-
-        with training_args.main_process_first(desc="grouping texts together"):
-            lm_datasets = tokenized_datasets.map(
-                group_texts_question,
-                # batched=True,
-                num_proc=data_args.preprocessing_num_workers,
-                load_from_cache_file=not data_args.overwrite_cache,
-                desc=f"Grouping  texts in chunks of {block_size}",
-            )
-        # print(lm_datasets[data_args.eval_subset].column_names)
-
-    for split, data in lm_datasets.items():
-        total_eval_tokens = 0
-        for chunk in data['labels']:
-            total_eval_tokens += len([x for x in chunk[1:] if x != padding_index])
-        logger.info(f'[{split}] Total eval tokens: {total_eval_tokens}')
-        # if knn_args.dstore_size is None and split == 'train':
-        # if knn_args.dstore_size is None and split == data_args.eval_subset:
-        #     knn_args.dstore_size = total_eval_tokens
-        print('Dstore size: ', knn_args.dstore_size)
-
-    if training_args.do_eval or data_args.prompt:
-        if data_args.eval_subset not in tokenized_datasets:
-            raise ValueError("--do_eval requires a validation dataset")
-        eval_dataset = lm_datasets[data_args.eval_subset]
-        if data_args.max_eval_samples is not None:
-            eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
-        # print("eval dataset picked with cols", eval_dataset.column_names)
-
     if knn_args.retomaton or knn_args.cluster_dstore:
         knn_wrapper = RetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_damb = knn_args.dstore_damb, dstore_dir=knn_args.dstore_dir, 
             dimension=dimension, 
@@ -669,22 +559,11 @@ Now here is my question:
             no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
             recompute_dists=knn_args.recompute_dists,
             k=knn_args.k, lmbda1=knn_args.lmbda1, lmbda2=knn_args.lmbda2, knn_temp=knn_args.knn_temp, probe=knn_args.probe)
-    elif knn_args.save_knnlm_dstore or knn_args.build_index:
-        knn_wrapper = KNNSaver(dstore_size=knn_args.dstore_size, dstore_damb = knn_args.dstore_damb, dstore_dir=knn_args.dstore_dir, 
-            dimension=dimension, knn_keytype=knn_args.knn_keytype)
     
     if knn_wrapper is not None:
         knn_wrapper.break_into(model)
         if knn_args.dstore_size is not None:
             knn_wrapper.global_reconstruct_index, knn_wrapper.global_index = knn_wrapper.global_faiss()
-
-    def partial_match(preds, labels):
-        pm = 0
-        for p,l in zip(preds, labels):
-            if l.lower() in p.lower():
-                pm+=1
-        pm = pm*100/len(preds)
-        return {'partial_match': pm}
 
     def postprocess_text(answer):
         # print(answer)
@@ -720,74 +599,12 @@ Now here is my question:
         answer =  ' '.join(filtered_words)
         # print(answer)
         return answer
-  
+    
     def match(pred, answers):
-        # answers = answers[2:-2].split("', '")
-        # print(answers, pred)
-        # pred = postprocess_text(pred)
-        # print(pred)
         if pred in answers:
             return 1
         return 0
 
-    def compute_metrics_alias(preds, labels):
-        # result = bertscore.compute(predictions=preds, references=labels, model_type="distilbert-base-uncased")
-        em = 0
-        pm = 0 
-        # references = np.char.lower(references)
-
-        for pred, label in zip(preds, labels):
-            if pred.strip() in label:
-                em+=1
-            for l in label:
-                if l in pred:
-                    pm+=1
-                    break
-            
-
-        result = {"exact_match": em*100/len(preds)}
-        print(f"exact_match: {result['exact_match']}")
-
-        result["partial_match"] = pm*100/len(preds)
-        print(f"Noisy answer: {result['partial_match']}")
-
-        bleu = sacrebleu.compute(predictions=preds, references=labels)
-        result["bleu"] = bleu["score"]
-        print(f"bleu: {bleu['score']}")
-
-        # prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
-        # result["gen_len"] = np.mean(prediction_lens)
-        result = {k: round(v, 4) for k, v in result.items()}
-        return result
-
-    def compute_metrics(pred, label):
-        # result = bertscore.compute(predictions=preds, references=labels, model_type="distilbert-base-uncased")
-        em = 0
-        pm = 0 
-        # references = np.char.lower(references)
-
-        if pred.strip() in label:
-            em = 1
-        for l in label:
-            if l in pred:
-                pm = 1
-                break
-            
-        result = {"exact_match": em}
-        # print(f"exact_match: {result['exact_match']}")
-
-        result["partial_match"] = pm
-        # print(f"Noisy answer: {result['partial_match']}")
-        # print(pred, label)
-        bleu = sacrebleu.compute(predictions=[pred], references=[label])
-        result["bleu"] = bleu["score"]
-        # print(f"bleu: {bleu['score']}")
-
-        # prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
-        # result["gen_len"] = np.mean(prediction_lens)
-        result = {k: round(v, 4) for k, v in result.items()}
-        return result
-    
     def add_answer(example, ind, answer_list = None, match_list = None, output_list = None, first_pass = True):
         if first_pass:
             example['output1'] = output_list[ind]
@@ -798,91 +615,38 @@ Now here is my question:
             example['match'] = match_list[ind]
         return example
 
-
     if data_args.prompt:
         if not knn_args.knn and not knn_args.retomaton:
             knn_args.dstore_size = 0
-        # print("*** Generating answers ***")
-        # sacrebleu = load("sacrebleu")
-        # exact_match = load("exact_match")
-        # bertscore = load("bertscore")
-        # true_answers = []
-        '''norm_aliases = []
-        max_alias = 0
-        for qa in raw_datasets[data_args.eval_subset]:
-            # true_answers.append(qa["answer"]["value"])
-            norm_aliases.append(qa["answer"]["normalized_aliases"])
-        # print(norm_aliases)
-            if len(qa["answer"]["normalized_aliases"])>max_alias:
-                max_alias = len(qa["answer"]["normalized_aliases"])
-        print("Max aliases: ", max_alias)
-        norm_aliases = [
-        ref + [ref[0]] * (max_alias - len(ref))  # Duplicate first reference as padding
-        for ref in norm_aliases]'''
-        # print(model.forward)
-        # print(eval_dataset.column_names)
-        # generated_ids = model.generate(tokenizer.encode(data_args.prompt, return_tensors='pt').to(training_args.device), num_beams=5, num_return_sequences=5, do_sample=True)
-        answers = []
         outputs = []
-        if knn_args.knn:
-            stride = 4
-        else:
-            stride = 4
+        batch_size = 4
+        knn_wrapper.batch_size = batch_size
         # print(eval_dataset.num_rows)
         max_new_tokens = 24
+        knn_wrapper.max_new_tokens = max_new_tokens
         if knn_wrapper is not None:
-            knn_wrapper.num_beams = 5
+            knn_wrapper.num_beams = 1
             dstore_path = knn_args.dstore_dir + '/0file.pkl'
             with open(dstore_path, 'rb') as file:
                 knn_wrapper.dstore_sizes = pickle.load(file)
         #[30719, 5119, 790, 5120, 19455, 34815, 2047, 2048, 5121, 13311, 4095, 17407, 1023, 9215, 6143, 18431, 15359, 27647, 2049, 3071, 15360, 46079, 3072, 591, 6144, 39935, 28671, 6145, 15361, 47103, 14335, 1024, 8191, 1025, 2050, 6146, 19456, 16383, 712, 13312, 35839, 33791, 10239, 4096, 2051, 4097, 3073, 6147, 5122, 11263]
         # tokenized_inputs = {col: eval_dataset[col] for col in eval_dataset.column_names}
-        input_ids = torch.tensor(eval_dataset["input_ids"])
-        attention_mask = torch.tensor(eval_dataset["attention_mask"])
+        tokenizer.pad_token_id = model.config.eos_token_id
+        tokenizer.padding_side='left'
+
         text_generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
         # ritu_questions = [quest[0] for quest in raw_datasets['latest'][text_column_name][:50]]
-        outputs = text_generator(raw_datasets['latest'][text_column_name][:52], max_new_tokens=max_new_tokens, pad_token_id = tokenizer.eos_token_id)
-        print(outputs)
-        print(2/0)
-        for i in tqdm(range(0, eval_dataset.num_rows, stride), desc = 'Generating open ended answer'):
-            # if knn_args.knn:
-                # knn_wrapper.dstore_size = dstore_sizes[i][0]
-                # knn_wrapper.dstore_damb = dstore_sizes[i][1]
-                # knn_wrapper.reconstruct_index, knn_wrapper.index = knn_wrapper.setup_faiss()
-            
-            # tokenizer.pad_token_id = tokenizer.eos_token_id
-            input_ids = torch.tensor(eval_dataset["input_ids"][i:i+stride])
-            attention_mask = torch.tensor(eval_dataset["attention_mask"][i:i+stride])
-            # print(input_ids, attention_mask)
-
-            input_ids = input_ids.to(model.device)
-            attention_mask = attention_mask.to(model.device)
-            # logger.info(f'Input_ids: {input_ids.shape}')
-            # print(input_ids.shape, input_ids, attention_mask.shape, attention_mask)
-
-            # print(f"model: {model.device}, data: {input_ids.device}, {attention_mask.device}")
-            # print(input_ids)
-            logger.info(f'~~~~~calling Generate{i}, {i+stride}')
-            generated_ids = model.generate(inputs = input_ids, attention_mask = attention_mask, num_beams=knn_wrapper.num_beams, num_return_sequences=1, do_sample=True, max_new_tokens = max_new_tokens, pad_token_id = tokenizer.eos_token_id)
-            for generated_id in generated_ids:
-                output = ""
-                answer = ""
-                # print(generated_id[:-1024])
-                for ind, beam_output in enumerate(generated_id):
-
-                    if ind < block_size:
-                        continue
-                    if beam_output == tokenizer.eos_token_id or beam_output == 128001:
-                        continue
-                    output+=tokenizer.decode(beam_output)
-                    # logger.info(f'{i}: {tokenizer.decode(beam_output)}')
-                # print(qa["question"]," True: ", qa["answer"]["value"]," pred: ", answer)
-                # print('Before: ', answer)
-                # answer = output.split('\n')[0]
-                # print('After: ', answer)
-                answers.append(output.split('\n')[0])
-                outputs.append(output)
-        # print(answers)
+        # print("~~~~~~~~~~~Default batch size:", text_generator.batch_size)
+        # raw_datasets[data_args.eval_subset] = raw_datasets[data_args.eval_subset].select(range(0,16))
+        outputs = text_generator(raw_datasets['latest'][text_column_name], batch_size = batch_size, max_new_tokens=knn_wrapper.max_new_tokens, pad_token_id = tokenizer.eos_token_id)
+        outputs = [op[0]['generated_text'] for op in outputs]
+        answers = []
+        for op, row in zip(outputs, raw_datasets['latest'][text_column_name]):
+            # print(row, op)
+            answer = op[len(row):]
+            # print(answer)
+            answer.split('\n')[0]
+            answers.append(answer)
 
     if data_args.post_process:
         if knn_wrapper is not None:

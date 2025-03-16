@@ -563,8 +563,11 @@ def main():
         dups[row] = ind.tolist()[0]
 
     raw = copy.deepcopy(raw_datasets)
-    for rituind in tqdm(range(len(dstore_sizes), raw[data_args.eval_subset].num_rows), desc='Local Dstore'):
+    for rituind in tqdm(range(raw[data_args.eval_subset].num_rows), desc='Local Dstore'):
         logger.info(f'{len(dstore_sizes), rituind}')
+        if dstore_sizes[rituind] != (None, None):
+            continue
+        print(dstore_sizes[rituind-5:rituind+1])
         if dups[rituind]!=0:
             dstore_sizes.append(dstore_sizes[dups[rituind]])
             logger.info(f'Duplicate found - {dstore_sizes[dups[rituind]]}! Skipping')
@@ -636,15 +639,16 @@ def main():
             if knn_args.dstore_size is None and split == data_args.eval_subset:
                 knn_args.dstore_size = total_eval_tokens
             print('Dstore size: ', knn_args.dstore_size)
-        if knn_args.dstore_size < 256:
-            dstore_sizes.append((None, None))
-            continue
+        # if knn_args.dstore_size < 256:
+        #     dstore_sizes.append((None, None))
+        #     continue
         while (knn_args.dstore_size, knn_args.dstore_damb) in dstore_sizes:
             if knn_args.dstore_damb is None:
                 knn_args.dstore_damb = 1
                 continue
             knn_args.dstore_damb+=1
-        dstore_sizes.append((knn_args.dstore_size,knn_args.dstore_damb))
+        # dstore_sizes.append((knn_args.dstore_size,knn_args.dstore_damb))
+        dstore_sizes[rituind] = (knn_args.dstore_size,knn_args.dstore_damb)
 
         if training_args.do_train:
             if "train" not in tokenized_datasets:
@@ -752,6 +756,7 @@ def main():
         # dstore_path = knn_args.dstore_dir + '/0file.pkl'
         with open(dstore_path, 'wb') as file:
             pickle.dump(dstore_sizes, file)
+        print(dstore_sizes[rituind-5:rituind+1])
     
 
     

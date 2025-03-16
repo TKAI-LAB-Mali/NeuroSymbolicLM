@@ -83,7 +83,7 @@ class KNNWrapper(object):
         self.dist_func = dist_type_to_dist_func[knn_sim_func] # l2 or dot product function
 
     def cleanup_dstore(self):
-        logger.info(f'cleanup previous dstores')
+        # logger.info(f'cleanup previous dstores')
         for attr in ['keys', 'vals']:
             if hasattr(self, attr):
                 delattr(self, attr)
@@ -160,7 +160,7 @@ class KNNWrapper(object):
         start = time.time()
         index_name = get_index_path(self.dstore_dir, self.model.config.model_type, self.dstore_size, self.dimension, self.dstore_damb) 
         cpu_index = faiss.read_index(index_name, faiss.IO_FLAG_ONDISK_SAME_DIR)
-        logger.info(f'Reading datastore took {time.time() - start} s')
+        # logger.info(f'Reading datastore took {time.time() - start} s')
         cpu_index.nprobe = self.probe
 
         if self.knn_gpu:
@@ -168,7 +168,7 @@ class KNNWrapper(object):
             co = faiss.GpuClonerOptions()
             co.useFloat16 = True
             gpu_index = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), 0, cpu_index, co)
-            logger.info(f'Moving index to GPU took {time.time() - start} s')
+            # logger.info(f'Moving index to GPU took {time.time() - start} s')
         else:
             gpu_index = cpu_index
 
@@ -181,31 +181,31 @@ class KNNWrapper(object):
 
         keys_vals_prefix = get_dstore_path(self.dstore_dir, self.model.config.model_type, self.dstore_size, self.dimension, self.dstore_damb)
         if self.no_load_keys:
-            self.keys = np.memmap(f'{keys_vals_prefix}_keys.npy', dtype=np.float16, mode='r',
+            keys = np.memmap(f'{keys_vals_prefix}_keys.npy', dtype=np.float16, mode='r',
                                   shape=(self.dstore_size, self.dimension))
-        self.vals = np.memmap(f'{keys_vals_prefix}_vals.npy', dtype=np.int32, mode='r',
+        vals = np.memmap(f'{keys_vals_prefix}_vals.npy', dtype=np.int32, mode='r',
                               shape=(self.dstore_size, 1))
         # self.vals = torch.from_numpy(self.vals).to(self.device)
 
         # If you wish to load all the keys into memory
         # CAUTION: Only do this if your RAM can handle it!
         if self.move_dstore_to_mem:
-            logger.info('Loading to memory...')
+            # logger.info('Loading to memory...')
             start = time.time()
 
             if self.no_load_keys:
-                del self.keys
-                self.keys_from_memmap = np.memmap(f'{keys_vals_prefix}_keys.npy', 
+                del keys
+                keys_from_memmap = np.memmap(f'{keys_vals_prefix}_keys.npy', 
                     dtype=np.float16, mode='r', shape=(self.dstore_size, self.dimension))
                 # self.keys = self.keys_from_memmap[:].astype(np.float16)
 
-            del self.vals
+            del vals
             vals_from_memmap = np.memmap(f'{keys_vals_prefix}_vals.npy', dtype=np.int32, mode='r', shape=(self.dstore_size, 1))
-            self.vals = torch.from_numpy(vals_from_memmap[:]).long().to(self.device)
+            vals = torch.from_numpy(vals_from_memmap[:]).long().to(self.device)
             del vals_from_memmap
-            logger.info('Loading to memory took {} s'.format(time.time() - start))
+            # logger.info('Loading to memory took {} s'.format(time.time() - start))
 
-        return cpu_index, gpu_index
+        return cpu_index, gpu_index, keys_from_memmap, vals
 
     def break_into(self, model):
         self.model = model
@@ -258,6 +258,23 @@ class KNNWrapper(object):
         lm_logits = torch.nn.functional.log_softmax(lm_logits, dim=-1) # (batch, time, vocab)
         queries = self.activation_capturer.captured # (batch, time, dim)
 
+        if self.max_new_tokens == 0:
+            self.max_new_tokens = 24
+
+        if self.max_new_tokens == 24:
+            # self.dstore_damb = self.dstore_sizes[i][1]
+            self.faiss_objects = []
+            self.dstore_size_disamb = []
+            for i in range(queries.shape[0]//self.num_beams):
+                # logger.info(f'Dstores left {len(self.dstore_sizes)}')
+                self.dstore_size, self.dstore_damb = self.dstore_sizes.pop(0)
+                # reconstruct_index, index = self.setup_faiss()
+                self.faiss_objects.append(self.setup_faiss())
+                self.dstore_size_disamb.append((self.dstore_size, self.dstore_damb))
+            self.max_new_tokens -= 1
+        else:
+            self.max_new_tokens -= 1
+        # logger.info(f'tokens left to generate: {self.max_new_tokens}')
         if self.labels is None:
             nonpad_mask = torch.cat([
                 torch.zeros([batch, time_dim - 1], dtype=torch.bool),
@@ -270,18 +287,16 @@ class KNNWrapper(object):
             ], axis=-1)
 
         lm_logits = lm_logits[nonpad_mask]
-        logger.info(f'lm_logits shape: {lm_logits.shape}')
+        # logger.info(f'lm_logits shape: {lm_logits.shape}')
         queries = queries[nonpad_mask] # (nonpad, dim)
-        logger.info(f'querries shape: {queries.shape}')
+        # logger.info(f'querries shape: {queries.shape}')
         unbatch_queries = torch.chunk(queries, queries.shape[0]//self.num_beams)
-        logger.info(f'unbatch_queries shape: {len(unbatch_queries)}')
+        # logger.info(f'unbatch_queries shape: {len(unbatch_queries)}')
         knn_log_probs_list, local_score_list= [], []
-        for que in unbatch_queries:
-            logger.info(f'unbatch_queries shape: {que.shape}')
-            (self.dstore_size, self.dstore_damb) = self.dstore_sizes.pop(0)
-            # self.dstore_damb = self.dstore_sizes[i][1]
-            self.reconstruct_index, self.index = self.setup_faiss()
-        
+        for que, fais_obj, dsa in zip(unbatch_queries, self.faiss_objects, self.dstore_size_disamb):
+            
+            self.dstore_size, self.dstore_damb = dsa
+            self.reconstruct_index, self.index, self.keys_from_memmap, self.vals = fais_obj
             dists, knns = self.get_knns(que, True) # (nonpad batch * time, k)
             
             if self.recompute_dists:
@@ -312,7 +327,7 @@ class KNNWrapper(object):
             
             global_neg_dists = -global_dists
             global_knn_log_probs, _ = self.knns_to_log_prob(global_knns, global_neg_dists, False)
-            logger.info(f'global_knn_log_probs shape: {global_knn_log_probs.shape}')
+            # logger.info(f'global_knn_log_probs shape: {global_knn_log_probs.shape}')
             self.global_keys = self.global_keys_from_memmap[global_knns.cpu()].astype(np.float16)
             self.global_keys = torch.from_numpy(self.global_keys).long().to(self.device)
             # logger.info(f'global keys: {self.global_keys}')
