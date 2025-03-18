@@ -245,6 +245,7 @@ class KNNArguments:
     move_dstore_to_mem: bool = field(default=True)
     no_load_keys: bool = field(default=True)
     recompute_dists: bool = field(default=False)
+    t: int = field(default=10)
 
     ## RetoMaton args:
     retomaton: bool = field(default=False)
@@ -549,7 +550,7 @@ Now here is my question:
             knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
             no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
             recompute_dists=knn_args.recompute_dists,
-            k=knn_args.k, lmbda1=knn_args.lmbda1, lmbda2=knn_args.lmbda2, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
+            k=knn_args.k, t=knn_args.t, lmbda1=knn_args.lmbda1, lmbda2=knn_args.lmbda2, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
             no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
             members=knn_args.members)
     elif knn_args.knn:
@@ -558,7 +559,7 @@ Now here is my question:
             knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
             no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
             recompute_dists=knn_args.recompute_dists,
-            k=knn_args.k, lmbda1=knn_args.lmbda1, lmbda2=knn_args.lmbda2, knn_temp=knn_args.knn_temp, probe=knn_args.probe)
+            k=knn_args.k, t=knn_args.t, lmbda1=knn_args.lmbda1, lmbda2=knn_args.lmbda2, knn_temp=knn_args.knn_temp, probe=knn_args.probe)
     
     if knn_wrapper is not None:
         knn_wrapper.break_into(model)
@@ -619,13 +620,14 @@ Now here is my question:
         if not knn_args.knn and not knn_args.retomaton:
             knn_args.dstore_size = 0
         outputs = []
-        batch_size = 4
+        batch_size = 8
         knn_wrapper.batch_size = batch_size
         # print(eval_dataset.num_rows)
         max_new_tokens = 24
         knn_wrapper.max_new_tokens = max_new_tokens
+        logger.info(f'max_new_tokens: {knn_wrapper.max_new_tokens}')
         if knn_wrapper is not None:
-            knn_wrapper.num_beams = 1
+            knn_wrapper.num_beams = 5
             dstore_path = knn_args.dstore_dir + '/0file.pkl'
             with open(dstore_path, 'rb') as file:
                 knn_wrapper.dstore_sizes = pickle.load(file)
@@ -638,7 +640,7 @@ Now here is my question:
         # ritu_questions = [quest[0] for quest in raw_datasets['latest'][text_column_name][:50]]
         # print("~~~~~~~~~~~Default batch size:", text_generator.batch_size)
         # raw_datasets[data_args.eval_subset] = raw_datasets[data_args.eval_subset].select(range(0,16))
-        outputs = text_generator(raw_datasets['latest'][text_column_name], batch_size = batch_size, max_new_tokens=knn_wrapper.max_new_tokens, pad_token_id = tokenizer.eos_token_id)
+        outputs = text_generator(raw_datasets['latest'][text_column_name], batch_size = batch_size, max_new_tokens=knn_wrapper.max_new_tokens, pad_token_id = tokenizer.eos_token_id, num_beams = knn_wrapper.num_beams)
         outputs = [op[0]['generated_text'] for op in outputs]
         answers = []
         for op, row in zip(outputs, raw_datasets['latest'][text_column_name]):
@@ -758,7 +760,7 @@ Example question: """
             'dataset': data_args.dataset_name,
             'retomaton': knn_args.retomaton, 
             'knn': knn_args.knn, 
-            'lambda': knn_args.lmbda1, # + '+' + knn_args.lmbda2, 
+            'lambda': str(knn_args.lmbda1) + '+' + str(knn_args.lmbda2), 
             'block_size': block_size, 
             'k': knn_args.k, 
             'knn_temp': knn_args.knn_temp,
@@ -811,14 +813,14 @@ Example question: """
             'dataset': data_args.dataset_name,
             'retomaton': knn_args.retomaton, 
             'knn': knn_args.knn, 
-            'lambda': knn_args.lmbda1,# + '+' + knn_args.lmbda2, 
+            'lambda': str(knn_args.lmbda1) + '+' + str(knn_args.lmbda2), 
             'block_size': block_size, 
             'k': knn_args.k, 
             'knn_temp': knn_args.knn_temp,
             'max_new_tokens' : max_new_tokens,
             'dstore_size' : knn_args.dstore_size,
             'exact_match' : round(em, 2),
-            'notes':  'direct answer generation',
+            'notes':  'sample',
         }
         logger.info(metrics_to_file)
         fieldnames = list(metrics_to_file.keys())

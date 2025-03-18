@@ -44,7 +44,7 @@ class KNNWrapper(object):
             knn_sim_func=None, knn_keytype=None,
             no_load_keys=False, move_dstore_to_mem=False, knn_gpu=True,
             recompute_dists = False,
-            k=512, lmbda1=0.25, lmbda2=0.1, knn_temp=1.0, probe=32):
+            k=512, t=10, lmbda1=0.25, lmbda2=0.1, knn_temp=1.0, probe=32):
         self.dstore_size = dstore_size
         self.dstore_damb = dstore_damb
         self.dstore_dir = dstore_dir
@@ -52,6 +52,7 @@ class KNNWrapper(object):
         self.lmbda1 = lmbda1
         self.lmbda2 = lmbda2
         self.k = k
+        self.t = t
         self.knn_temperature = knn_temp
         self.probe = probe
         self.knn_sim_func = DIST.l2 if knn_sim_func is None else knn_sim_func
@@ -205,9 +206,10 @@ class KNNWrapper(object):
             del vals_from_memmap
             # logger.info('Loading to memory took {} s'.format(time.time() - start))
 
-        return cpu_index, gpu_index, keys_from_memmap, vals
+        return gpu_index, keys_from_memmap, vals
 
     def break_into(self, model):
+        logger.info(f'Registering hooks')
         self.model = model
         model.broken_into = True
         # self.reconstruct_index, self.index = self.setup_faiss()
@@ -260,6 +262,7 @@ class KNNWrapper(object):
 
         if self.max_new_tokens == 0:
             self.max_new_tokens = 24
+            del self.faiss_objects, self.dstore_size_disamb, self.index, self.keys, self.keys_from_memmap
 
         if self.max_new_tokens == 24:
             # self.dstore_damb = self.dstore_sizes[i][1]
@@ -291,12 +294,13 @@ class KNNWrapper(object):
         queries = queries[nonpad_mask] # (nonpad, dim)
         # logger.info(f'querries shape: {queries.shape}')
         unbatch_queries = torch.chunk(queries, queries.shape[0]//self.num_beams)
-        # logger.info(f'unbatch_queries shape: {len(unbatch_queries)}')
+        # logger.info(f'unbatch_queries len: {len(unbatch_queries)}')
         knn_log_probs_list, local_score_list= [], []
         for que, fais_obj, dsa in zip(unbatch_queries, self.faiss_objects, self.dstore_size_disamb):
             
             self.dstore_size, self.dstore_damb = dsa
-            self.reconstruct_index, self.index, self.keys_from_memmap, self.vals = fais_obj
+            self.index, self.keys_from_memmap, self.vals = fais_obj
+
             dists, knns = self.get_knns(que, True) # (nonpad batch * time, k)
             
             if self.recompute_dists:
@@ -313,7 +317,7 @@ class KNNWrapper(object):
             # logger.info(f'querries shape: {queries.shape}\nkeys shape: {self.keys.shape}')
                 # logger.info(torch.unique(global_score, dim=0))
             # logger.info(self.keys)
-            local_score = KNNWrapper.knn_relevance(que, self.keys)
+            local_score = KNNWrapper.knn_relevance(que, self.keys, self.t)
             knn_log_probs_list.append(knn_log_probs)
             local_score_list.append(local_score)
         # logger.info(f'knn_log_probs_list shape: {knn_log_probs_list.shape}')
@@ -331,13 +335,14 @@ class KNNWrapper(object):
             self.global_keys = self.global_keys_from_memmap[global_knns.cpu()].astype(np.float16)
             self.global_keys = torch.from_numpy(self.global_keys).long().to(self.device)
             # logger.info(f'global keys: {self.global_keys}')
-            global_score = KNNWrapper.knn_relevance(queries, self.global_keys)
+            global_score = KNNWrapper.knn_relevance(queries, self.global_keys, self.t)
 
             # logger.info(f'local score: {local_score}\nglobal score: {global_score}')
             # dist = min(dists)
             # global_dist = min(global_dists)
             # logger.info(f'local max:{torch.max(torch.unique(local_score, dim=0))} global_max:{torch.max(torch.unique(global_score, dim=0))}')
             unbatch_global_knn_log_probs = torch.chunk(global_knn_log_probs, global_knn_log_probs.shape[0]//self.num_beams)
+            # logger.info(f'unbatch_global_knn_log_probs len: {len(unbatch_global_knn_log_probs)}')
             unbatch_global_score = torch.chunk(global_score, global_score.shape[0]//self.num_beams)
             interpolated_scores = []
             for l_k_probs, g_k_probs, logits, l_score, g_score in zip(knn_log_probs_list, unbatch_global_knn_log_probs, lm_logits, local_score_list, unbatch_global_score):
@@ -372,6 +377,7 @@ class KNNWrapper(object):
         self.hook_handles.append(handle)
 
     def break_out(self):
+        logger.info(f'Removing hooks')
         for h in self.hook_handles:
             h.remove()
         if self.model is not None and self.model.broken_into is not None:
@@ -389,7 +395,7 @@ class KNNWrapper(object):
         return torch.sum((query.unsqueeze(-2) - keys)**2, dim=-1)
 
     @staticmethod
-    def knn_relevance(query, keys, T=10):
+    def knn_relevance(query, keys, T):
         # distance = np.linalg.norm(query_embedding - doc_embedding)
         # return np.exp(-distance / T)
         distance = torch.norm(query.unsqueeze(1) - keys, dim = -1)
@@ -477,6 +483,7 @@ class KNNSaver(object):
         logger.info('Saving fp16')
 
     def break_into(self, model):
+        logger.info(f'Registering hooks')
         self.model = model
         model.broken_into = True
         self.is_encoder_decoder = model.config.is_encoder_decoder
@@ -548,6 +555,7 @@ class KNNSaver(object):
         self.hook_handles.append(handle)
     
     def break_out(self):
+        logger.info(f'Removing hooks')
         for h in self.hook_handles:
             h.remove()
         if self.model is not None and self.model.broken_into is not None:
