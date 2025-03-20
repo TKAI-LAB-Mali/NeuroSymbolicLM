@@ -564,6 +564,7 @@ Now here is my question:
     if knn_wrapper is not None:
         knn_wrapper.break_into(model)
         if knn_args.dstore_size is not None:
+            knn_wrapper.global_dstore_size = knn_args.dstore_size
             knn_wrapper.global_reconstruct_index, knn_wrapper.global_index = knn_wrapper.global_faiss()
 
     def postprocess_text(answer):
@@ -754,16 +755,18 @@ Example question: """
         
         time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
         
-        fieldnames = ['time', 'model', 'dataset', 'retomaton', 'knn', 'lambda', 'block_size', 'k', 'knn_temp', 'max_new_tokens', 'dstore_size', 'exact_match', 'notes']
+        fieldnames = ['time', 'model', 'dataset', 'retomaton', 'knn', 'lambda1', 'lambda2', 'block_size', 'k', 'knn_temp', 't', 'max_new_tokens', 'dstore_size', 'exact_match', 'notes']
         metrics_to_file = { 'time': time_st,
             'model': model_args.model_name_or_path,
             'dataset': data_args.dataset_name,
             'retomaton': knn_args.retomaton, 
             'knn': knn_args.knn, 
-            'lambda': str(knn_args.lmbda1) + '+' + str(knn_args.lmbda2), 
+            'lambda1': knn_args.lmbda1,
+            'lambda2' : knn_args.lmbda2, 
             'block_size': block_size, 
             'k': knn_args.k, 
             'knn_temp': knn_args.knn_temp,
+            't' : knn_args.t,
             'max_new_tokens' : max_new_tokens,
             'dstore_size' : 'local', #knn_args.dstore_size,
             'exact_match' : round(em, 4),
@@ -787,6 +790,8 @@ Example question: """
         # print(answers)
         if knn_args.dstore_size is None:
             knn_args.dstore_size = 0
+            knn_args.lmbda2 = 0
+            knn_args.t = 0
         answers = [postprocess_text(ans) for ans in answers]
         match_list = [match(pred, ans) for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['input_correct_responses'])]
         em = sum(match_list)/raw_datasets[data_args.eval_subset].num_rows*100
@@ -807,20 +812,22 @@ Example question: """
         
         time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
         
-        fieldnames = ['time', 'model', 'dataset', 'retomaton', 'knn', 'lambda', 'block_size', 'k', 'knn_temp', 'max_new_tokens', 'dstore_size', 'exact_match', 'notes']
+        fieldnames = ['time', 'model', 'dataset', 'retomaton', 'knn', 'lambda1', 'lambda2', 'block_size', 'k','knn_temp', 't', 'max_new_tokens', 'dstore_size', 'exact_match', 'notes']
         metrics_to_file = { 'time': time_st,
             'model': model_args.model_name_or_path,
             'dataset': data_args.dataset_name,
             'retomaton': knn_args.retomaton, 
             'knn': knn_args.knn, 
-            'lambda': str(knn_args.lmbda1) + '+' + str(knn_args.lmbda2), 
+            'lambda1': knn_args.lmbda1,
+            'lambda2' : knn_args.lmbda2, 
             'block_size': block_size, 
-            'k': knn_args.k, 
+            'k': knn_args.k,
             'knn_temp': knn_args.knn_temp,
+            't' : knn_args.t,
             'max_new_tokens' : max_new_tokens,
             'dstore_size' : knn_args.dstore_size,
             'exact_match' : round(em, 2),
-            'notes':  'sample',
+            'notes':  'direct answer',
         }
         logger.info(metrics_to_file)
         fieldnames = list(metrics_to_file.keys())

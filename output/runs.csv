@@ -3,16 +3,16 @@ time,model,dataset,retomaton,knn,lambda1,lambda2,block_size,k,knn_temp,relevance
 2025-02-15_23:51:33,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,False,0.25,,512,1024,1.0,,12,0,46.0,Sentence to json
 2025-02-17_15:01:24,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,512,1024,1.0,,12,591,46.0,Sentence to json
 2025-02-17_15:06:48,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,512,512,1.0,,12,591,46.0,k
-2025-02-17_15:16:01,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.1,,512,512,1.0,12,,591,44.0,k and lambda
-2025-02-17_15:22:09,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.3,,512,512,1.0,12,,591,44.0,k and lambda
-2025-02-17_15:26:55,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,512,256,1.0,12,,591,46.0,Sentence to json
-2025-02-17_15:41:32,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,512,1024,0.8,12,,591,46.0,Sentence to json
-2025-02-18_10:56:53,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,512,1024,1.0,12,,519,38.0,Sentence to json
-2025-02-18_11:07:14,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.3,,512,1024,1.0,12,,8350,36.0,Sentence to json
-2025-02-18_11:19:49,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,,512,1024,1.0,12,,8350,48.0,Sentence to json
-2025-02-18_11:38:42,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,,512,1024,0.8,12,,8350,46.0,Sentence to json
-2025-02-18_12:31:31,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,,512,1024,0.9,12,,8350,48.0,Sentence to json
-2025-02-18_12:35:46,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.1,,512,1024,0.9,12,,8350,54.0,Sentence to json
+2025-02-17_15:16:01,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.1,,512,512,1.0,,12,591,44.0,k and lambda
+2025-02-17_15:22:09,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.3,,512,512,1.0,,12,591,44.0,k and lambda
+2025-02-17_15:26:55,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,512,256,1.0,,12,591,46.0,Sentence to json
+2025-02-17_15:41:32,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,512,1024,0.8,,12,591,46.0,Sentence to json
+2025-02-18_10:56:53,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,512,1024,1.0,,12,519,38.0,Sentence to json
+2025-02-18_11:07:14,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.3,,512,1024,1.0,,12,8350,36.0,Sentence to json
+2025-02-18_11:19:49,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,,512,1024,1.0,,12,8350,48.0,Sentence to json
+2025-02-18_11:38:42,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,,512,1024,0.8,,12,8350,46.0,Sentence to json
+2025-02-18_12:31:31,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,,512,1024,0.9,,12,8350,48.0,Sentence to json
+2025-02-18_12:35:46,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.1,,512,1024,0.9,,12,8350,54.0,Sentence to json
 2025-02-20_19:14:15,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,False,0.25,,1024,1024,1.0,,64,0,0.0,direct answer generation
 2025-02-21_00:34:50,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,False,0.25,,512,1024,1.0,,12,0,41.7952,entire dataset Base model
 2025-02-26_14:03:57,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.1,,512,1024,0.9,,12,local,42.8723,entire dataset KNN model
@@ -53,7 +53,7 @@ time,model,dataset,retomaton,knn,lambda1,lambda2,block_size,k,knn_temp,relevance
 2025-03-15_20:09:27,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,1024,1024,1.0,,24,120965366,18.75,direct answer generation
 2025-03-15_20:13:33,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,1024,1024,1.0,,24,120965366,18.75,direct answer generation
 2025-03-15_23:42:21,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,1024,1024,1.0,,24,120965366,12.5,direct answer generation
-2025-03-15_23:43:17,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,1024,1024,1.0,,24,120965366,18.75,direct answer generation
+2025-03-15_23:43:17,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,1024,1024,1.0,,24,120965366,18.75,direct answer generation
 2025-03-15_23:46:43,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,1024,1024,1.0,,24,120965366,12.5,direct answer generation
 2025-03-15_23:47:24,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,,1024,1024,1.0,,24,120965366,18.75,direct answer generation
 2025-03-16_02:13:06,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,0.1,1024,1024,1.0,10,24,120965366,34.35,GPU - local+global
@@ -71,3 +71,9 @@ time,model,dataset,retomaton,knn,lambda1,lambda2,block_size,k,knn_temp,relevance
 2025-03-18_01:52:14,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,0.05,1024,64,0.7,5,24,120965366,38.92,l+g at t=5
 2025-03-18_02:26:18,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,0.05,1024,1024,1.0,5,24,120965366,39.4,l+g at t=5
 2025-03-18_02:26:18,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,0.05,1024,1024,0.7,5,24,120965366,39.08,l+g at t=5
+2025-03-18_12:01:56,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.35,,1024,64,0.7,,24,0,43.09,sample
+2025-03-18_12:20:47,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.35,,1024,1024,1.0,,24,0,43.22,sample
+2025-03-18_12:30:25,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,,1024,1024,1.0,,24,0,44.07,sample
+2025-03-19_01:01:22,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,0.05,1024,1024,10,1.0,24,120965366,5.44,buggy
+2025-03-19_01:01:38,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.25,0.1,1024,1024,10,1.0,24,120965366,5.35,buggy
+2025-03-19_01:19:58,meta-llama/Llama-3.2-1B,Ritu27/Llama-3.1-8B-evals-TriviaQA-rc,False,True,0.15,0.05,1024,1024,1.0,20,24,120965366,5.44,buggy
