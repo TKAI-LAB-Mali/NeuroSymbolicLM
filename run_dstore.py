@@ -37,10 +37,12 @@ import torch.nn as nn
 from evaluate import load
 import time
 import string
+import re
 import csv
 
 import datasets
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
+from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 import pickle
 import pandas as pd
@@ -57,6 +59,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
     default_data_collator,
+    DataCollatorWithPadding,
     set_seed,
 )
 from transformers.testing_utils import CaptureLogger
@@ -203,6 +206,7 @@ class DataTrainingArguments:
     eval_subset: str = field(default='validation')
     stride: int = field(default=512)
     patience: int = field(default=None)
+    # do_predict: bool = field(default=False)
     prompt: bool = field(default=False)
 
 
@@ -230,7 +234,7 @@ class KNNArguments:
     save_knnlm_dstore: bool = field(default=False)
     dstore_dir: str = field(default="checkpoints")
     knn_sim_func: DIST.from_string = field(default=DIST.l2)
-    lmbda: float = field(default=0.25)
+    lmbda1: float = field(default=0.25)
     k: int = field(default=1024)
     knn_temp: float = field(default=1.0)
     # Args for building the faiss index:
@@ -322,19 +326,19 @@ def main():
         raw_datasets = load_dataset(
             data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
         )
-        # if "validation" not in raw_datasets.keys():
-        #     raw_datasets["validation"] = load_dataset(
-        #         data_args.dataset_name,
-        #         data_args.dataset_config_name,
-        #         split=f"train[:{data_args.validation_split_percentage}%]",
-        #         cache_dir=model_args.cache_dir,
-        #     )
-        #     raw_datasets["train"] = load_dataset(
-        #         data_args.dataset_name,
-        #         data_args.dataset_config_name,
-        #         split=f"train[{data_args.validation_split_percentage}%:]",
-        #         cache_dir=model_args.cache_dir,
-        #     )
+        if "validation" not in raw_datasets.keys() and 'gsm' not in data_args.dataset_name:
+            raw_datasets["validation"] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=f"train[:{data_args.validation_split_percentage}%]",
+                cache_dir=model_args.cache_dir,
+            )
+            raw_datasets["train"] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=f"train[{data_args.validation_split_percentage}%:]",
+                cache_dir=model_args.cache_dir,
+            )
     else:
         data_files = {}
         dataset_args = {}
@@ -368,10 +372,6 @@ def main():
                 **dataset_args,
             )
 
-    # if not (training_args.do_train or data_args.eval_subset == 'train'):
-    #     # If not training and not evaluating on train, we do not need to process it
-    #     del raw_datasets["train"]
-    #     del raw_datasets["test"]
     for split in list(raw_datasets.keys()):
         if split != data_args.eval_subset:
             del raw_datasets[split]
@@ -384,6 +384,11 @@ def main():
     # Distributed training:
     # The .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
+    gpu_id = 0
+    free_mem, total_mem = torch.cuda.mem_get_info(gpu_id)
+
+    print(f"Free memory: {free_mem / 1024 ** 2:.2f} MB")
+    print(f"Total memory: {total_mem / 1024 ** 2:.2f} MB")
     
     config_kwargs = {
         "cache_dir": model_args.cache_dir,
@@ -416,7 +421,7 @@ def main():
             "You are instantiating a new tokenizer from scratch. This is not supported by this script."
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
-
+    tokenizer.pad_token = tokenizer.eos_token 
     if model_args.model_name_or_path:
         model = AutoModelForCausalLM.from_pretrained(
             model_args.model_name_or_path,
@@ -431,12 +436,18 @@ def main():
         n_params = sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
-    # model.to('cuda')
+    model.to('cuda')
     print("Model assigned to ",model.device)
     model.resize_token_embeddings(len(tokenizer))
 
+    # free_mem, total_mem = torch.cuda.mem_get_info(gpu_id)
+
+    # print(f"Free memory: {free_mem / 1024 ** 2:.2f} MB")
+    # print(f"Total memory: {total_mem / 1024 ** 2:.2f} MB")
+
     # Injecting KNN
     dimension = model.config.hidden_size
+    logger.info(f'Dimension: {dimension}')
     knn_wrapper = None
     knn_args.seed = training_args.seed
 
@@ -446,37 +457,58 @@ def main():
     # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
     tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
     
-    def extract_multi_context(triviaq):
-        triviaq["context"] = " ".join(triviaq["wiki_context"])
+    def clean_text(text):
+        # Remove URLs
+        text = re.sub(r'https?://\S+|www\.\S+', '', text)
 
-        # triviaq["context"] = ""
-        # if len(triviaq["entity_pages"]["wiki_context"])>0:
-        #     triviaq["context"] += " ".join(triviaq["entity_pages"]["wiki_context"]) + " "
-        # if len(triviaq["search_results"]["search_context"])>0:
-        #     triviaq["context"] += " ".join(triviaq["search_results"]["search_context"])
-        # print(len(triviaq["context"]), "~ ")
-        return triviaq
+        # Remove citations like [1], [citation needed]
+        text = re.sub(r'\[[^\]]*\]', '', text)
+    
+        # Normalize whitespace
+        text = re.sub(r'\s+', ' ', text)
+    
+        # Optionally remove non-ASCII characters (can disable this if you want accents preserved)
+        text = re.sub(r'[^\x00-\x7F]+', '', text)
+    
+        # Strip leading/trailing whitespace
+        return text.strip()
+    
+    def clean_example(example):
+        example['question'] = clean_text(example['question'])
+        example['context'] = clean_text(' '.join(example['entity_pages']['wiki_context'] + example['search_results']['search_context']))
+    
+        return example
+
+    def format_QA(example):
+        # Answer the following question through careful, concise step-by-step reasoning:\nQuestion: {question}\nSolution: {_target}
+        # text = f"Answer the following question through careful, concise step-by-step reasoning:\nQuestion: {example['question']}\nSolution: {example['answer']}"
+        text = f"<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: {example['question']}\nYour response should end with \"\n#### [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\n{example['answer']}\n"
+        # text = re.sub(r'\s+', ' ', text)
+        example['inputs'] = text
+        # print(example)
+        return example
+
+    def filter_by_word_count(example):
+        return len(example['question'].split()) <= 2048
+
+    def format_mmlu(mmlu):
+        mmlu['inputs'] = f"Answer the follwoing multiple choice question:\n{mmlu['question']}\nA. {mmlu['choices'][0]}\nB. {mmlu['choices'][1]}\nC. {mmlu['choices'][2]}\nD. {mmlu['choices'][3]}\nAnswer:  + {mmlu['answer']}"
+        return mmlu
 
     def tokenize_function(examples):
-        # print("    ",examples[text_column_name][0])
         with CaptureLogger(tok_logger) as cl:
             output = tokenizer(examples[text_column_name])
-            # print(output[0])
         # clm input could be much much longer than block_size
         if "Token indices sequence length is longer than the" in cl.out:
             tok_logger.warning(
                 "^^^^^^^^^^^^^^^^ Please ignore the warning above - this long input will be chunked into smaller bits before being passed to the model."
             )
-        # print(output.keys())
         return output
 
-
     # Main data processing function that will concatenate all texts from our dataset and generate chunks of block_size.
-    def group_texts_context(examples):
+    def group_texts(examples):
         # Concatenate all texts.
-        # print("begin concatenation")
-        concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
-        # print("done")
+        concatenated_examples = examples if isinstance(examples['input_ids'][0], int) else {k: sum(examples[k], []) for k in examples.keys()}
         total_length = len(concatenated_examples[list(examples.keys())[0]])
         # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
         # customize this part to your needs.
@@ -509,18 +541,19 @@ def main():
         result = {'input_ids': input_ids, 'labels': labels, 'attention_mask': attention_mask}
         return result
 
-    with training_args.main_process_first(desc="dataset map context"):
-        raw_datasets = raw_datasets.map(
-            extract_multi_context,
-            # batched=True,
-            num_proc=data_args.preprocessing_num_workers,
-            load_from_cache_file=not data_args.overwrite_cache,
-            desc="dataset map context",
-        )
-    # print(raw_datasets[data_args.eval_subset][20])
-    column_names = raw_datasets[data_args.eval_subset].column_names
-    # print(raw_datasets[data_args.eval_subset]['question'][:5])
-    # print(prompt_quests)
+    def pad_labels(example):
+        # input_id_len = len(example['input_ids'])
+        # print(f"Before: {example['input_ids']}")
+        padding_size = max_len_pad - len(example['input_ids'])
+        pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+        pad_input_seq = [pad_token_id] * padding_size
+        pad_label_seq = [padding_index] * padding_size
+        pad_att_seq = [0] * padding_size
+        example['labels'] = pad_label_seq + example['input_ids']
+        example['input_ids'] = pad_input_seq + example['input_ids']
+        example['attention_mask'] = pad_att_seq + example['attention_mask']
+        # print(f"After: {example['input_ids']}")
+        return example
 
     if data_args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -538,227 +571,328 @@ def main():
             )
         block_size = min(data_args.block_size, tokenizer.model_max_length)
 
-    dstore_path = knn_args.dstore_dir + '/0file.pkl'
-    with open(dstore_path, 'rb') as file:
-        dstore_sizes = pickle.load(file)
-    print(len(dstore_sizes))
-    # [(19455, None), (21503, None), (14335, None), (17407, None), (20479, None), (2047, None), (25599, None), (519, None), (5119, None), (20479, 1), (15359, None), (682, None), (18431, None), (3071, None), (1023, None), (4095, None), (4095, 1), (2047, 1), (17407, 1), (16383, None), (14335, 1), (8191, None), (29695, None), (893, None), (6143, None), (11263, None), (2047, 2), (69631, None), (23551, None), (7167, None), (10239, None), (6143, 1), (6143, 2), (978, None), (26623, None), (19455, 1), (499, None), (3071, 1), (3071, 2), (11263, 1), (20479, 2), (13311, None), (460, None), (17407, 2), (9215, None), (16383, 1), (9215, 1), (13311, 1), (5119, 1), (1023, 1), (11263, 2), (13311, 2), (30719, None), (26623, 1), (5119, 2), (7167, 1), (5119, 3), (4095, 2), (5119, 4), (36863, None), (3071, 3), (50175, None), (38911, None), (23551, 1), (17407, 3), (24575, None), (46079, None), (27647, None), (29695, 1), (17407, 4), (19455, 2), (2047, 3), (7167, 2), (932, None), (24575, 1), (6143, 3), (11263, 3), (9215, 2), (6143, 4), (3071, 4), (26623, 2), (11263, 4), (10239, 1), (8191, 1), (1023, 2), (30719, 1), (8191, 2), (4095, 3), (12287, None), (7167, 3), (11263, 5), (5119, 5), (10239, 2), (12287, 1), (2047, 4), (4095, 4), (13311, 3), (9215, 3), (21503, 1), (19455, 3), (15359, 1), (10239, 3), (11263, 6), (11263, 7), (9215, 4), (39935, None), (8191, 3), (36863, 1), (14335, 2), (7167, 4), (13311, 4), (14335, 3), (22527, None), (16383, 2), (8191, 4), (16383, 3), (2047, 5), (20479, 3), (6143, 5), (11263, 8), (48127, None), (23551, 2), (13311, 5), (10239, 4), (24575, 2), (31743, None), (9215, 5), (16383, 4), (7167, 5), (2047, 6), (17407, 5), (1023, 3), (1023, 4), (13311, 6), (1023, 5), (9215, 6), (6143, 6), (1023, 6), (11263, 9), (1023, 7), (16383, 5), (5119, 6), (29695, 2), (30719, 2), (43007, None), (1023, 8), (8191, 5), (17407, 6), (2047, 7), (6143, 7), (1023, 9), (14335, 4), (1023, 10), (1023, 11), (1023, 12), (22527, 1), (9215, 7), (30719, 3), (1023, 13), (11263, 10), (5119, 7), (18431, 1), (5119, 8), (34815, None), (3071, 5), (13311, 7), (9215, 8), (7167, 6), (2047, 8), (6143, 8), (462, None), (1023, 14), (8191, 6), (795, None), (7167, 7), (5119, 9), (35839, None), (9215, 9), (6143, 9), (4095, 5), (43007, 1), (5119, 10), (10239, 5), (8191, 7), (632, None), (8191, 8), (6143, 10), (19455, 4), (1023, 15), (2047, 9), (4095, 6), (11263, 11), (18431, 2), (14335, 5), (16383, 6), (13311, 8), (10239, 6), (10239, 7), (7167, 8), (6143, 11), (2047, 10), (21503, 2), (8191, 9), (32767, None), (31743, 1), (10239, 8), (368, None), (4095, 7), (3071, 6), (18431, 3), (6143, 12), (5119, 11), (2047, 11), (685, None), (11263, 12), (2047, 12), (1023, 16), (4095, 8), (9215, 10), (12287, 2), (27647, 1), (10239, 9), (1023, 17), (2047, 13), (11263, 13), (2047, 14), (16383, 7), (19455, 5), (581, None), (7167, 9), (14335, 6), (13311, 9), (9215, 11), (4095, 9), (886, None), (12287, 3), (9215, 12), (4095, 10), (870, None), (7167, 10), (2047, 15), (64511, None), (3071, 7), (18431, 4), (6143, 13), (12287, 4), (15359, 2), (9215, 13), (13311, 10), (10239, 10), (4095, 11), (38911, 1), (29695, 3), (7167, 11), (9215, 14), (2047, 16), (19455, 6), (615, None), (9215, 15), (15359, 3), (24575, 3), (4095, 12), (14335, 7), (7167, 12), (2047, 17)]
-    # [(19455, None), (21503, None), (14335, None), (17407, None), (20479, None), (2047, None), (25599, None), (519, None), (5119, None)]
-    # [19455, 21503, 14335, 17407, 20479, 2047, 25599, 519, 5119, 20480, 15359, 682, 18431, 3071, 1023, 4095, 4096, 2048, 17408, 16383, 14336, 8191, 29695, 893, 6143, 11263, 2049, 69631, 23551, 7167, 10239, 6144, 6145, 978, 26623, 19456, 499, 3072, 3073, 11264, 20481, 13311, 460, 17409, 9215, 16384, 9216, 13312, 5120, 1024, 11265, 13313, 30719, 26624, 5121, 7168, 5122, 4097, 5123, 36863, 3074, 50175, 38911, 23552, 17410, 24575, 46079, 27647, 29696, 17411, 19457, 2050, 7169, 932, 24576, 6146, 11266, 9217, 6147, 3075, 26625, 11267, 10240, 8192, 1025, 30720, 8193, 4098, 12287, 7170, 11268, 5124, 10241, 12288, 2051, 4099, 13314, 9218, 21504, 19458, 15360, 10242, 11269, 11270, 9219, 39935, 8194, 36864, 14337, 7171, 13315, 14338, 22527, 16385, 8195, 16386, 2052, 20482, 6148, 11271, 48127, 23553, 13316, 10243, 24577, 31743, 9220, 16387, 7172, 2053, 17412, 1026, 1027, 13317, 1028, 9221, 6149, 1029, 11272, 1030, 16388, 5125, 29697, 30721, 43007, 1031, 8196, 17413, 2054, 6150, 1032, 14339, 1033, 1034, 1035, 22528, 9222, 30722, 1036, 11273, 5126, 18432, 5127, 34815, 3076, 13318, 9223, 7173, 2055, 6151, 462, 1037, 8197, 795, 7174, 5128, 35839, 9224, 6152, 4100, 43008, 5129, 10244, 8198, 632, 8199, 6153, 19459, 1038, 2056, 4101, 11274, 18433, 14340, 16389, 13319, 10245, 10246, 7175, 6154, 2057, 21505, 8200, 32767, 31744, 10247, 368, 4102, 3077, 18434, 6155, 5130, 2058, 685, 11275, 2059, 1039, 4103, 9225, 12289, 27648, 10248, 1040, 2060, 11276, 2061, 16390, 19460, 581, 7176, 14341, 13320, 9226, 4104, 886, 12290, 9227, 4105, 870, 7177, 2062, 64511, 3078, 18435, 6156, 12291, 15361, 9228, 13321, 10249, 4106, 38912, 29698, 7178, 9229, 2063, 19461, 615, 9230, 15362, 24578, 4107, 14342, 7179, 2064]
-    #[30719, 5119, 790, -1, 19455, 34815, 2047, -1, -1, 13311, 4095, 17407, 1023, 9215, 6143, 18431, 15359, 27647, -1, 3071, -1, 46079, -1, 591, -1, 39935, 28671, -1, -1, 47103, 14335, -1, 8191, -1, -1, -1, -1, 16383, 712, -1, 35839, 33791, 10239, -1, -1, -1, -1, -1, -1, 11263]
-
-    logger.info(f'Fetching duplicates')
-    df = pd.DataFrame(raw_datasets['latest'])
-    context = df['wiki_context']
-    duplicates = context[context.duplicated()].index
-    dups = [0]*raw_datasets['latest'].num_rows
-    df["context_length"] = df["wiki_context"].apply(len)
-    for row in duplicates:
-        cont = raw_datasets['latest'][row]['wiki_context']
-        eqlen = df[df['context_length']==len(cont)]
-        # ind = eqlen[eqlen['wiki_context'].eq(cont)].index
-        ind = eqlen[eqlen['wiki_context'].apply(lambda x: x == cont)].index
-        # print(ind.tolist())
-        # break
-        dups[row] = ind.tolist()[0]
-
-    raw = copy.deepcopy(raw_datasets)
-    for rituind in tqdm(range(raw[data_args.eval_subset].num_rows), desc='Local Dstore'):
-        logger.info(f'{len(dstore_sizes), rituind}')
-        if dstore_sizes[rituind] != (None, None):
-            continue
-        print(dstore_sizes[rituind-5:rituind+1])
-        if dups[rituind]!=0:
-            dstore_sizes.append(dstore_sizes[dups[rituind]])
-            logger.info(f'Duplicate found - {dstore_sizes[dups[rituind]]}! Skipping')
-            with open(dstore_path, 'wb') as file:
-                pickle.dump(dstore_sizes, file)
-            continue
-
-        # if dstore_sizes[rituind] != -1:
-        #     continue
-        knn_args.dstore_size = None
-        knn_args.dstore_damb = None
-        if knn_args.build_index or knn_args.save_knnlm_dstore or knn_args.cluster_dstore or training_args.do_eval:
-            # print(raw_datasets["validation"]["context"])
-            
-            # datastats = datasetStats()
-            # datastats.stats(raw_datasets[data_args.eval_subset]["ip_question"], "wholeIP"+data_args.eval_subset+".png")
-            # seed = 89
-            # sample_size = min(50, raw_datasets[data_args.eval_subset].num_rows)
-            # shuffled_dataset = raw_datasets[data_args.eval_subset].shuffle(seed=seed)
-            # sampled_dataset = shuffled_dataset.select([rituind])
-            # raw[data_args.eval_subset] = sampled_dataset
-
-            raw[data_args.eval_subset] = raw_datasets[data_args.eval_subset].select([rituind])
-
-            # print(raw_datasets[data_args.eval_subset].num_rows)
-            # datastats.stats(raw_datasets[data_args.eval_subset]["ip_question"], "sampleIP"+data_args.eval_subset+".png")
-
-            # Preprocessing the datasets.
-            # First we tokenize all the texts.
-            # if training_args.do_train:
-                # print()
-            # else:
-            #     column_names = raw_datasets["validation"].column_names
-            text_column_name = "context" if "context" in column_names else column_names[0]
-
-            with training_args.main_process_first(desc="dataset map tokenization"):
-                tokenized_datasets = raw.map(
-                    tokenize_function,
-                    batched=True,
-                    num_proc=data_args.preprocessing_num_workers,
-                    remove_columns=column_names,
-                    load_from_cache_file=not data_args.overwrite_cache,
-                    desc="Running tokenizer on dataset",
-                )
-            print("tokenized_dataset format: ",tokenized_datasets[data_args.eval_subset].column_names)
-            # Note that with `batched=True`, this map processes 1,000 texts together, so group_texts throws away a remainder
-            # for each of those groups of 1,000 texts. You can adjust that batch_size here but a higher value might be slower
-            # to preprocess.
-            #
-            # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
-            # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
-
-            with training_args.main_process_first(desc="grouping texts together"):
-                lm_datasets = tokenized_datasets.map(
-                    group_texts_context,
-                    batched=True,
-                    num_proc=data_args.preprocessing_num_workers,
-                    load_from_cache_file=not data_args.overwrite_cache,
-                    desc=f"Grouping texts in chunks of {block_size}",
+    if 'triviaqa' in data_args.dataset_name and training_args.do_eval:
+        with training_args.main_process_first(desc="clean context"):
+            raw_datasets = raw_datasets.map(
+                clean_example,
+                # batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="dataset map context",
             )
-            print("grouped texts format: ",lm_datasets[data_args.eval_subset].column_names)
+        column_names = raw_datasets[data_args.eval_subset].column_names
+        text_column_name = "context" if "context" in column_names else column_names[0]
+        batched = False
+        with training_args.main_process_first(desc="dataset map tokenization"):
+            tokenized_datasets = raw_datasets.map(
+                tokenize_function,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                remove_columns=column_names,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on dataset",
+            )
+    elif 'gsm' in data_args.dataset_name and training_args.do_eval:
+        with training_args.main_process_first(desc="clean context"):
+            raw_datasets = raw_datasets.map(
+                format_QA,
+                # batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="dataset map context",
+            )
+        logger.info(f'[{data_args.eval_subset}] has {raw_datasets[data_args.eval_subset].num_rows}')
+        column_names = raw_datasets[data_args.eval_subset].column_names
+        text_column_name = "inputs" if "inputs" in column_names else column_names[0]
+        tokenizer.padding_side = "left"
+        with training_args.main_process_first(desc="dataset map tokenization"):
+            tokenized_datasets = raw_datasets.map(
+                tokenize_function,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                remove_columns=column_names,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on dataset",
+            )
+        max_len_pad = max(len(input_ids) for input_ids in tokenized_datasets[data_args.eval_subset]['input_ids'])
+        logger.info(f'[{split}] Max length of input: {max_len_pad}')
+    
+    elif 'mmlu' in data_args.dataset_name and training_args.do_eval:
+        logger.info(f'[{data_args.eval_subset}] has {raw_datasets[data_args.eval_subset].num_rows}')
+        raw_datasets = raw_datasets.filter(filter_by_word_count)
+        with training_args.main_process_first(desc="clean context"):
+            raw_datasets = raw_datasets.map(
+                format_mmlu,
+                # batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="dataset map context",
+            )
+        logger.info(f'[{data_args.eval_subset}] has {raw_datasets[data_args.eval_subset].num_rows}')
+        column_names = raw_datasets[data_args.eval_subset].column_names
+        text_column_name = "inputs" if "inputs" in column_names else column_names[0]
+        tokenizer.padding_side = "left"
+        with training_args.main_process_first(desc="dataset map tokenization"):
+            tokenized_datasets = raw_datasets.map(
+                tokenize_function,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                remove_columns=column_names,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on dataset",
+            )
+        max_len_pad = max(len(input_ids) for input_ids in tokenized_datasets[data_args.eval_subset]['input_ids'])
+        logger.info(f'[{split}] Max length of input: {max_len_pad}')
 
-        for split, data in lm_datasets.items():
-            total_eval_tokens = 0        
-            for chunk in data['labels']:
-                total_eval_tokens += len([x for x in chunk[1:] if x != padding_index])
-            logger.info(f'[{split}] Total eval tokens: {total_eval_tokens}')
-            # if knn_args.dstore_size is None and split == 'train':
+    # Note that with `batched=True`, this map processes 1,000 texts together, so group_texts throws away a remainder
+    # for each of those groups of 1,000 texts. You can adjust that batch_size here but a higher value might be slower
+    # to preprocess.
+    #
+    # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
+    # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
+
+    if 'triviaqa' in data_args.dataset_name and training_args.do_eval:
+        with training_args.main_process_first(desc="grouping texts together"):
+            lm_datasets = tokenized_datasets.map(
+                group_texts,
+                num_proc=data_args.preprocessing_num_workers,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc=f"Grouping texts in chunks of {block_size}",
+            )
+    elif ('gsm' in data_args.dataset_name or 'mmlu' in data_args.dataset_name) and training_args.do_eval:
+        with training_args.main_process_first(desc="generating labels"):
+            lm_datasets = tokenized_datasets.map(
+                pad_labels,
+                num_proc=data_args.preprocessing_num_workers,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc=f"labels",
+            )
+    if training_args.do_train:
+        if "train" not in tokenized_datasets:
+            raise ValueError("--do_train requires a train dataset")
+        train_dataset = lm_datasets["train"]
+        if data_args.max_train_samples is not None:
+            train_dataset = train_dataset.select(range(data_args.max_train_samples))
+    elif training_args.do_eval:
+        if data_args.eval_subset not in tokenized_datasets:
+            raise ValueError("--do_eval requires a validation dataset")
+        eval_dataset = lm_datasets[data_args.eval_subset]
+        if data_args.max_eval_samples is not None:
+            eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
+        print("eval dataset picked with cols", eval_dataset.column_names)
+
+    if knn_args.retomaton or knn_args.cluster_dstore:
+        knn_wrapper = RetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_damb = knn_args.dstore_damb, dstore_dir=knn_args.dstore_dir, 
+            dimension=dimension, 
+            knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
+            no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
+            recompute_dists=knn_args.recompute_dists,
+            k=knn_args.k, lmbda1=knn_args.lmbda1, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
+            no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
+            members=knn_args.members)
+    elif knn_args.knn:
+        knn_wrapper = KNNWrapper(dstore_size=knn_args.dstore_size, dstore_damb = knn_args.dstore_damb, dstore_dir=knn_args.dstore_dir, 
+            dimension= dimension, 
+            knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
+            no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
+            recompute_dists=knn_args.recompute_dists,
+            k=knn_args.k, lmbda1=knn_args.lmbda1, knn_temp=knn_args.knn_temp, probe=knn_args.probe)
+    elif knn_args.save_knnlm_dstore or knn_args.build_index:
+        knn_wrapper = KNNSaver(dstore_size=knn_args.dstore_size, dstore_damb = knn_args.dstore_damb, dstore_dir=knn_args.dstore_dir, 
+            dimension=dimension, knn_keytype=knn_args.knn_keytype)
+    if knn_args.cluster_dstore:
+            knn_wrapper.cluster_dstore(num_clusters=knn_args.num_clusters, sample_size=knn_args.sample_size, model=model)
+    
+    def do_train():
+        checkpoint = None
+        if training_args.resume_from_checkpoint is not None:
+            checkpoint = training_args.resume_from_checkpoint
+        elif last_checkpoint is not None:
+            checkpoint = last_checkpoint
+        train_result = trainer.train(resume_from_checkpoint=checkpoint)
+        trainer.save_model()  # Saves the tokenizer too for easy upload
+
+        metrics = train_result.metrics
+
+        max_train_samples = (
+            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+        )
+        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
+
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
+
+    def do_eval():
+        logger.info("*** Evaluate ***")
+
+        metrics = trainer.evaluate()
+        
+        logger.info('Evaluation complete, calculating perplexity')
+
+        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(trainer.eval_dataset)
+        metrics["eval_samples"] = min(max_eval_samples, len(trainer.eval_dataset))
+        try:
+            perplexity = math.exp(metrics["eval_loss"])
+        except OverflowError:
+            perplexity = float("inf")
+        metrics["perplexity"] = perplexity
+
+        if knn_wrapper is not None:
+            knn_metrics = knn_wrapper.get_metrics()
+            metrics.update(knn_metrics)
+
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
+    
+    def do_predict():
+        logger.info("*** Predict ***")
+
+        output = trainer.predict(eval_dataset)
+        token_ids = np.argmax(output.predictions, axis=-1)
+        # print(token_ids)
+        decoded_texts = tokenizer.batch_decode(token_ids, skip_special_tokens=True)
+        print(decoded_texts)
+    if training_args.do_eval or training_args.do_train:
+        if 'trivia' in data_args.dataset_name:
+            dstore_path = knn_args.dstore_dir + '/0rc.pkl'
+            if os.path.exists(dstore_path):
+                with open(dstore_path, 'rb') as file:
+                    dstore_sizes = pickle.load(file)
+            else:
+                dstore_sizes = []
+            print(f'# of dstores: {len(dstore_sizes)}')
+
+            logger.info(f'Fetching duplicates')
+            df = pd.DataFrame(raw_datasets[data_args.eval_subset])
+            context = df[text_column_name]
+            first_occurrence = {}
+            dups = [0] * len(df)
+
+            for i, text in enumerate(context):
+                if isinstance(text, list):
+                    text = ' '.join(text)
+                if text in first_occurrence:
+                    dups[i] = first_occurrence[text]
+                else:
+                    first_occurrence[text] = i
+            logger.info(f'setting up {len(first_occurrence)} dstores')
+            del raw_datasets, tokenized_datasets, 
+            
+            for rowind in tqdm(range(len(dstore_sizes), eval_dataset.num_rows), desc='Local Dstore'):
+                logger.info(f'{len(dstore_sizes), rowind}')
+                if dups[rowind]!=0:
+                    dstore_sizes.append(dstore_sizes[dups[rowind]])
+                    logger.info(f'Duplicate found - {dstore_sizes[dups[rowind]]}! Skipping')
+                    with open(dstore_path, 'wb') as file:
+                        pickle.dump(dstore_sizes, file)
+                    continue
+
+                knn_args.dstore_size = None
+                knn_args.dstore_damb = None
+
+                eval_input = eval_dataset[rowind]
+                eval_input = Dataset.from_dict({k: v for k, v in eval_input.items()})
+                # Initialize our Trainer
+                training_args.remove_unused_columns=False
+                trainer = Trainer(
+                    model=model,
+                    args=training_args,
+                    train_dataset=train_dataset if training_args.do_train else None,
+                    eval_dataset=eval_input if training_args.do_eval else None,
+                    tokenizer=tokenizer,
+                    # Data collator will default to DataCollatorWithPadding, so we change it.
+                    data_collator=default_data_collator,
+                    callbacks=[EarlyStoppingCallback(early_stopping_patience=data_args.patience)] if data_args.patience is not None else None,
+                )
+                # print(eval_input['labels'])
+                trainer.args._n_gpu = 1
+                total_eval_tokens = 0
+                for chunk in eval_input['labels']:
+                    # print(f"raw chunk: {chunk}")
+                    total_eval_tokens += len([x for x in chunk[1:] if x != padding_index])
+                    # print(f"tokens: {[x for x in chunk[1:] if x != padding_index]}")
+                logger.info(f'[{split}] Total eval tokens: {total_eval_tokens}')
+                # print(1/0)
+                # if knn_args.dstore_size is None and split == 'train':
+                knn_args.dstore_size = total_eval_tokens
+                print('Dstore size: ', knn_args.dstore_size)
+
+                while (knn_args.dstore_size, knn_args.dstore_damb) in dstore_sizes:
+                    if knn_args.dstore_damb is None:
+                        knn_args.dstore_damb = 1
+                        continue
+                    knn_args.dstore_damb+=1
+                dstore_sizes.append((knn_args.dstore_size,knn_args.dstore_damb))
+                # dstore_sizes[rowind] = (knn_args.dstore_size,knn_args.dstore_damb)
+                
+                if knn_wrapper is not None:
+                    knn_wrapper.dstore_size, knn_wrapper.dstore_damb = knn_args.dstore_size,knn_args.dstore_damb
+                    knn_wrapper.break_into(model)
+                
+                # Training
+                if training_args.do_train:
+                    do_train()
+
+                # Evaluation
+                if training_args.do_eval:
+                    do_eval()
+
+                if knn_args.build_index:
+                    knn_wrapper.build_index()
+
+                if knn_args.cluster_dstore:
+                    knn_wrapper.cluster_dstore(num_clusters=knn_args.num_clusters, sample_size=knn_args.sample_size, model=model)
+                
+                if knn_wrapper is not None:
+                    knn_wrapper.break_out()
+                with open(dstore_path, 'wb') as file:
+                    pickle.dump(dstore_sizes, file)
+        
+        elif 'gsm' in data_args.dataset_name or 'mmlu' in data_args.dataset_name:
+            tokenizer.padding_side = "left"
+            trainer = Trainer(
+                model=model,
+                args=training_args,
+                train_dataset=train_dataset if training_args.do_train else None,
+                eval_dataset=eval_dataset if training_args.do_eval else None,
+                tokenizer=tokenizer,
+                data_collator=default_data_collator,
+                callbacks=[EarlyStoppingCallback(early_stopping_patience=data_args.patience)] if data_args.patience is not None else None,
+            )
+            trainer.args._n_gpu = 1
+            
+            for split, data in lm_datasets.items():
+                total_eval_tokens = 0    
+                max_len = 0    
+                for chunk in data['labels']:
+                    total_eval_tokens += len([x for x in chunk[1:] if x != padding_index])
+                    # max_len = len(chunk) if len(chunk)>max_len else max_len
+                logger.info(f'[{split}] Total eval tokens: {total_eval_tokens}')
+                max_len = max(len(input_ids) for input_ids in tokenized_datasets[split]['input_ids'])
+            logger.info(f'[{split}] Max length of input: {max_len}')
             if knn_args.dstore_size is None and split == data_args.eval_subset:
                 knn_args.dstore_size = total_eval_tokens
-            print('Dstore size: ', knn_args.dstore_size)
-        # if knn_args.dstore_size < 256:
-        #     dstore_sizes.append((None, None))
-        #     continue
-        while (knn_args.dstore_size, knn_args.dstore_damb) in dstore_sizes:
-            if knn_args.dstore_damb is None:
-                knn_args.dstore_damb = 1
-                continue
-            knn_args.dstore_damb+=1
-        # dstore_sizes.append((knn_args.dstore_size,knn_args.dstore_damb))
-        dstore_sizes[rituind] = (knn_args.dstore_size,knn_args.dstore_damb)
-
-        if training_args.do_train:
-            if "train" not in tokenized_datasets:
-                raise ValueError("--do_train requires a train dataset")
-            train_dataset = lm_datasets["train"]
-            if data_args.max_train_samples is not None:
-                train_dataset = train_dataset.select(range(data_args.max_train_samples))
-
-        if training_args.do_eval or data_args.prompt:
-            if data_args.eval_subset not in tokenized_datasets:
-                raise ValueError("--do_eval requires a validation dataset")
-            eval_dataset = lm_datasets[data_args.eval_subset]
-            if data_args.max_eval_samples is not None:
-                eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
-            print("eval dataset picked with cols", eval_dataset.column_names)
-
-        # Initialize our Trainer
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset if training_args.do_train else None,
-            eval_dataset=eval_dataset if training_args.do_eval else None,
-            tokenizer=tokenizer,
-            # Data collator will default to DataCollatorWithPadding, so we change it.
-            data_collator=default_data_collator,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=data_args.patience)] if data_args.patience is not None else None,
-        )
-
-        if knn_args.retomaton or knn_args.cluster_dstore:
-            knn_wrapper = RetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_damb = knn_args.dstore_damb, dstore_dir=knn_args.dstore_dir, 
-                dimension=dimension, 
-                knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
-                no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
-                recompute_dists=knn_args.recompute_dists,
-                k=knn_args.k, lmbda=knn_args.lmbda, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
-                no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
-                members=knn_args.members)
-        elif knn_args.knn:
-            knn_wrapper = KNNWrapper(dstore_size=knn_args.dstore_size, dstore_damb = knn_args.dstore_damb, dstore_dir=knn_args.dstore_dir, 
-                dimension= dimension, 
-                knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
-                no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
-                recompute_dists=knn_args.recompute_dists,
-                k=knn_args.k, lmbda=knn_args.lmbda, knn_temp=knn_args.knn_temp, probe=knn_args.probe)
-        elif knn_args.save_knnlm_dstore or knn_args.build_index:
-            knn_wrapper = KNNSaver(dstore_size=knn_args.dstore_size, dstore_damb = knn_args.dstore_damb, dstore_dir=knn_args.dstore_dir, 
-                dimension=dimension, knn_keytype=knn_args.knn_keytype)
-        
-        if knn_wrapper is not None:
-            knn_wrapper.break_into(model)
-
-        # Training
-        if training_args.do_train:
-            checkpoint = None
-            if training_args.resume_from_checkpoint is not None:
-                checkpoint = training_args.resume_from_checkpoint
-            elif last_checkpoint is not None:
-                checkpoint = last_checkpoint
-            train_result = trainer.train(resume_from_checkpoint=checkpoint)
-            trainer.save_model()  # Saves the tokenizer too for easy upload
-
-            metrics = train_result.metrics
-
-            max_train_samples = (
-                data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
-            )
-            metrics["train_samples"] = min(max_train_samples, len(train_dataset))
-
-            trainer.log_metrics("train", metrics)
-            trainer.save_metrics("train", metrics)
-            trainer.save_state()
-
-        # Evaluation
-        if training_args.do_eval:
-            logger.info("*** Evaluate ***")
-
-            metrics = trainer.evaluate()
-            
-            logger.info('Evaluation complete, calculating perplexity')
-
-            max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-            metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
-            try:
-                perplexity = math.exp(metrics["eval_loss"])
-            except OverflowError:
-                perplexity = float("inf")
-            metrics["perplexity"] = perplexity
-
+                knn_args.dstore_damb = None
             if knn_wrapper is not None:
-                knn_metrics = knn_wrapper.get_metrics()
-                metrics.update(knn_metrics)
+                knn_wrapper.dstore_size, knn_wrapper.dstore_damb = knn_args.dstore_size,knn_args.dstore_damb
+                knn_wrapper.break_into(model)
+            if training_args.do_eval:
+                do_eval()
+            if training_args.do_predict:
+                do_predict()
 
-            trainer.log_metrics("eval", metrics)
-            trainer.save_metrics("eval", metrics)
+            if knn_args.build_index:
+                knn_wrapper.build_index()
 
-        if knn_args.build_index:
-            knn_wrapper.build_index()
+            if knn_args.cluster_dstore:
+                knn_wrapper.cluster_dstore(num_clusters=knn_args.num_clusters, sample_size=knn_args.sample_size, model=model)
+            
+            if knn_wrapper is not None:
+                knn_wrapper.break_out()
+            dstore_path = knn_args.dstore_dir + '/0mmlu.pkl'
+            with open(dstore_path, 'wb') as file:
+                pickle.dump([knn_args.dstore_size,knn_args.dstore_damb], file)
 
-        if knn_args.cluster_dstore:
-            knn_wrapper.cluster_dstore(num_clusters=knn_args.num_clusters, sample_size=knn_args.sample_size, model=model)
-        
-        if knn_wrapper is not None:
-            knn_wrapper.break_out()
-        # print(dstore_sizes)
-        # dstore_path = knn_args.dstore_dir + '/0file.pkl'
-        with open(dstore_path, 'wb') as file:
-            pickle.dump(dstore_sizes, file)
-        print(dstore_sizes[rituind-5:rituind+1])
-    
-
-    
 if __name__ == "__main__":
     main()

@@ -187,7 +187,7 @@ class RetomatonWrapper(KNNWrapper):
             logger.info(f'Lookups saved: {saved*100}%')
 
     def cluster_dstore(self, num_clusters, sample_size, model, batch_size=500000):
-        keys_vals_prefix = get_dstore_path(self.dstore_dir, model.config.model_type, self.dstore_size, self.dimension)
+        keys_vals_prefix = get_dstore_path(self.dstore_dir, model.config.model_type, self.dstore_size, self.dimension, self.dstore_damb)
         keys = np.memmap(f'{keys_vals_prefix}_keys.npy', dtype=np.float16, mode='r', shape=(self.dstore_size, self.dimension))
 
         if sample_size > self.dstore_size:
@@ -211,7 +211,7 @@ class RetomatonWrapper(KNNWrapper):
             logger.info('Moving index to GPU')
             co = faiss.GpuClonerOptions()
             co.useFloat16 = True
-            index = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), 2, index, co)
+            index = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), 0, index, co)
             logger.info('Moved index to GPU')
 
         start = 0
@@ -240,11 +240,14 @@ class RetomatonWrapper(KNNWrapper):
 
         members_filename = get_members_path(self.dstore_dir, 
             model.config.model_type, self.dstore_size, self.dimension,
-            sample_size, num_clusters)
+            sample_size, num_clusters,self.dstore_damb)
         with open(members_filename, 'wb') as f:
             pickle.dump(members_sp, f)
 
         logger.info(f'Done, found {len(cluster_to_members)} clusters, written to {members_filename}')
 
-def get_members_path(dstore_dir, model_type, dstore_size, dimension, sample_size, num_clusters):
-    return f'{dstore_dir}/members_{model_type}_{dstore_size}_{dimension}_{sample_size}_{num_clusters}.pkl'
+def get_members_path(dstore_dir, model_type, dstore_size, dimension, sample_size, num_clusters, dstore_damb):
+    if dstore_damb is None:
+        return f'{dstore_dir}/members_{model_type}_{dstore_size}_{dimension}_{sample_size}_{num_clusters}.pkl'
+    else:
+        return f'{dstore_dir}/members_{model_type}_{dstore_size}_{dimension}_{dstore_damb}_{sample_size}_{num_clusters}.pkl'

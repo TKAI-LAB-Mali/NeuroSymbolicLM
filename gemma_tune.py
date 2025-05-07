@@ -340,6 +340,19 @@ def main():
         raw_datasets = load_dataset(
             data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
         )
+        if "validation" not in raw_datasets.keys():
+            raw_datasets["validation"] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=f"train[:{data_args.validation_split_percentage}%]",
+                cache_dir=model_args.cache_dir,
+            )
+            raw_datasets["train"] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=f"train[{data_args.validation_split_percentage}%:]",
+                cache_dir=model_args.cache_dir,
+            )
     else:
         data_files = {}
         dataset_args = {}
@@ -417,7 +430,11 @@ def main():
             "You are instantiating a new tokenizer from scratch. This is not supported by this script."
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
+    # gpu_id = 0
+    # free_mem, total_mem = torch.cuda.mem_get_info(gpu_id)
 
+    # print(f"Free memory: {free_mem / 1024 ** 2:.2f} MB")
+    # print(f"Total memory: {total_mem / 1024 ** 2:.2f} MB")
     if model_args.model_name_or_path:
         # Use a pipeline as a high-level helper
         model = AutoModelForCausalLM.from_pretrained(
@@ -435,8 +452,12 @@ def main():
     if torch.cuda.is_available():
         model.to('cuda')
     logger.info(f'Model assigned to {model.device}')
+    # print("Model assigned to ",model.module.device)
     model.resize_token_embeddings(len(tokenizer))
+    # free_mem, total_mem = torch.cuda.mem_get_info(gpu_id)
 
+    # print(f"Free memory: {free_mem / 1024 ** 2:.2f} MB")
+    # print(f"Total memory: {total_mem / 1024 ** 2:.2f} MB")
     # Injecting KNN
     dimension = model.config.hidden_size
     knn_wrapper = None
@@ -488,30 +509,65 @@ Q: William Christensen of Madison, New Jersey, has claimed to have the world's b
 A: Beer Cans
 Q: In which decade did Billboard magazine first publish and American hit chart?
 A: 30s
-Q: '''
+Q:'''
         triviaq['input_final_prompts'] = prompt + triviaq['question'] + '\nA:'
         return triviaq
     
+    def process_gsm(answer):
+        match = re.search(r"#### ([\d,]+\.?\d*)", answer)
+        if match:
+            value = match.group(1)
+            return value.replace(',','')
+        return answer
+
     def format_gsm(example):
         # Answer the following question through careful, concise step-by-step reasoning:\nQuestion: {question}\nSolution: {_target}
-        prompt = "<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: There are 15 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 21 trees. How many trees did the grove workers plant today?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nThere are 15 trees originally. Then there were 21 trees after some more were planted. So there must have been 21 - 15 = 6. The final answer is 6<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: If there are 3 cars in the parking lot and 2 more cars arrive, how many cars are in the parking lot?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nThere are originally 3 cars. 2 more cars arrive. 3 + 2 = 5. The final answer is 5<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Leah had 32 chocolates and her sister had 42. If they ate 35, how many pieces do they have left in total?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nOriginally, Leah had 32 chocolates. Her sister had 42. So in total they had 32 + 42 = 74. After eating 35, they had 74 - 35 = 39. The final answer is 39<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Jason had 20 lollipops. He gave Denny some lollipops. Now Jason has 12 lollipops. How many lollipops did Jason give to Denny?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nJason started with 20 lollipops. Then he had 12 after giving some to Denny. So he gave Denny 20 - 12 = 8. The final answer is 8<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Shawn has five toys. For Christmas, he got two toys each from his mom and dad. How many toys does he have now?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nShawn started with 5 toys. If he got 2 toys each from his mom and dad, then that is 4 more toys. 5 + 4 = 9. The final answer is 9<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: There were nine computers in the server room. Five more computers were installed each day, from monday to thursday. How many computers are now in the server room?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nThere were originally 9 computers. For each of 4 days, 5 more computers were added. So 5 * 4 = 20 computers were added. 9 + 20 is 29. The final answer is 29<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Michael had 58 golf balls. On tuesday, he lost 23 golf balls. On wednesday, he lost 2 more. How many golf balls did he have at the end of wednesday?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nMichael started with 58 golf balls. After losing 23 on tuesday, he had 58 - 23 = 35. After losing 2 more, he had 35 - 2 = 33 golf balls. The final answer is 33<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Olivia has $23. She bought five bagels for $3 each. How much money does she have left?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nOlivia had 23 dollars. 5 bagels for 3 dollars each will be 5 x 3 = 15 dollars. So she has 23 - 15 dollars left. 23 - 15 is 8. The final answer is 8<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: "
-        text = prompt + f"{example['question']}\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\n"
+        # prompt = "<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: There are 15 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 21 trees. How many trees did the grove workers plant today?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nThere are 15 trees originally. Then there were 21 trees after some more were planted. So there must have been 21 - 15 = 6. The final answer is 6<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: If there are 3 cars in the parking lot and 2 more cars arrive, how many cars are in the parking lot?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nThere are originally 3 cars. 2 more cars arrive. 3 + 2 = 5. The final answer is 5<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Leah had 32 chocolates and her sister had 42. If they ate 35, how many pieces do they have left in total?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nOriginally, Leah had 32 chocolates. Her sister had 42. So in total they had 32 + 42 = 74. After eating 35, they had 74 - 35 = 39. The final answer is 39<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Jason had 20 lollipops. He gave Denny some lollipops. Now Jason has 12 lollipops. How many lollipops did Jason give to Denny?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nJason started with 20 lollipops. Then he had 12 after giving some to Denny. So he gave Denny 20 - 12 = 8. The final answer is 8<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Shawn has five toys. For Christmas, he got two toys each from his mom and dad. How many toys does he have now?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nShawn started with 5 toys. If he got 2 toys each from his mom and dad, then that is 4 more toys. 5 + 4 = 9. The final answer is 9<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: There were nine computers in the server room. Five more computers were installed each day, from monday to thursday. How many computers are now in the server room?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nThere were originally 9 computers. For each of 4 days, 5 more computers were added. So 5 * 4 = 20 computers were added. 9 + 20 is 29. The final answer is 29<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Michael had 58 golf balls. On tuesday, he lost 23 golf balls. On wednesday, he lost 2 more. How many golf balls did he have at the end of wednesday?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nMichael started with 58 golf balls. After losing 23 on tuesday, he had 58 - 23 = 35. After losing 2 more, he had 35 - 2 = 33 golf balls. The final answer is 33<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Olivia has $23. She bought five bagels for $3 each. How much money does she have left?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nOlivia had 23 dollars. 5 bagels for 3 dollars each will be 5 x 3 = 15 dollars. So she has 23 - 15 dollars left. 23 - 15 is 8. The final answer is 8<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: "
+        # text = prompt + f"{example['question']}\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        prompt = '''<start_of_turn> user
+You are a helpful 2nd-grade math teacher. Help a 2nd grader to answer problem in a short and clear manner. Your response should end with \"#### [NUM]\" where [num] is the response to the problem.
+Problem: There are 15 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 21 trees. How many trees did the grove workers plant today? <end_of_turn>
+<start_of_turn>model
+Answer: There are 15 trees originally. Then there were 21 trees after some more were planted. So there must have been 21 - 15 = 6.
+#### 6 <end_of_turn>
+<start_of_turn> user
+You are a helpful 2nd-grade math teacher. Help a 2nd grader to answer problem in a short and clear manner. Your response should end with \"#### [NUM]\" where [num] is the response to the problem.
+Problem: If there are 3 cars in the parking lot and 2 more cars arrive, how many cars are in the parking lot? <end_of_turn>
+<start_of_turn>model
+Answer: There are originally 3 cars. 2 more cars arrive. 3 + 2 = 5. #### 5 <end_of_turn>
+<start_of_turn> user
+You are a helpful 2nd-grade math teacher. Help a 2nd grader to answer problem in a short and clear manner. Your response should end with \"#### [NUM]\" where [num] is the response to the problem.
+Problem: Leah had 32 chocolates and her sister had 42. If they ate 35, how many pieces do they have left in total? <end_of_turn>
+<start_of_turn>model
+Answer: Originally, Leah had 32 chocolates. Her sister had 42. So in total they had 32 + 42 = 74. After eating 35, they had 74 - 35 = 39.
+#### 39 <end_of_turn>
+<start_of_turn> user
+You are a helpful 2nd-grade math teacher. Help a 2nd grader to answer problem in a short and clear manner. Your response should end with \"#### [NUM]\" where [num] is the response to the problem.
+Problem: Jason had 20 lollipops. He gave Denny some lollipops. Now Jason has 12 lollipops. How many lollipops did Jason give to Denny? <end_of_turn>
+<start_of_turn>model
+Answer: Jason started with 20 lollipops. Then he had 12 after giving some to Denny. So he gave Denny 20 - 12 = 8.
+#### 8 <end_of_turn>
+<start_of_turn> user
+You are a helpful 2nd-grade math teacher. Help a 2nd grader to answer problem in a short and clear manner. Your response should end with \"#### [NUM]\" where [num] is the response to the problem.
+Problem: Shawn has five toys. For Christmas, he got two toys each from his mom and dad. How many toys does he have now? <end_of_turn>
+<start_of_turn>model
+Answer: Shawn started with 5 toys. If he got 2 toys each from his mom and dad, then that is 4 more toys. 5 + 4 = 9.
+#### 9 <end_of_turn>
+<start_of_turn> user
+You are a helpful 2nd-grade math teacher. Help a 2nd grader to answer problem in a short and clear manner. Your response should end with \"#### [NUM]\" where [num] is the response to the problem.
+Problem: '''
+        text = prompt + f"{example['question']} <end_of_turn>\n<start_of_turn>model\nAnswer: "
         example['inputs'] = text
-        match = re.search(r"#### (\d+)", example['answer'])
-        if match:
-            example['extracted_ans'] = match.group(1)
-        else:
-            example['extracted_ans'] = ''
+        example['extracted_ans'] = process_gsm(example['answer'])
         return example
-    
+
     def format_mmlu(mmlu):
         prefix = prompt_prefix[mmlu['subject']]
         mmlu['input'] = prefix +'\n\n' +mmlu['question'] + '\nA. ' + mmlu['choices'][0] + '\nB. ' + mmlu['choices'][1] + '\nC. ' + mmlu['choices'][2] + '\nD. ' + mmlu['choices'][3] #+ '\n'
         return mmlu
-
-    def format_eval(mmlu):
-        mmlu['input_final_prompts'] = mmlu['input_final_prompts'][0][:-9]
-        return mmlu
+    
+    def filter_by_word_count(example):
+        return len(example['input'].split()) <= 1024
 
     if 'trivia' in data_args.dataset_name:
         with training_args.main_process_first(desc="format input prompt"):
@@ -522,9 +578,8 @@ Q: '''
                 desc="dataset map context",
             )
         raw_datasets = raw_datasets.remove_columns(['entity_pages','search_results'])
-        column_names = raw_datasets.column_names
+        column_names = raw_datasets[data_args.eval_subset].column_names
         text_column_name = 'input_final_prompts' if 'input_final_prompts' in column_names else column_names[0]
-    
     elif 'gsm' in data_args.dataset_name:
         with training_args.main_process_first(desc="format input prompt"):
             raw_datasets = raw_datasets.map(
@@ -546,20 +601,10 @@ Q: '''
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="format input",
             )
+        raw_datasets = raw_datasets.filter(filter_by_word_count)
         column_names = raw_datasets[data_args.eval_subset].column_names
         print(column_names)
         text_column_name = 'input' if 'input' in column_names else column_names[0]
-    elif 'eval' in data_args.dataset_name:
-        with training_args.main_process_first(desc="format input prompt"):
-            raw_datasets = raw_datasets.map(
-                format_eval,
-                num_proc=data_args.preprocessing_num_workers,
-                load_from_cache_file=not data_args.overwrite_cache,
-                desc="format input",
-            )
-        column_names = raw_datasets[data_args.eval_subset].column_names
-        print(column_names)
-        text_column_name = 'input_final_prompts' if 'input_final_prompts' in column_names else column_names[0]
 
     if data_args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -604,6 +649,10 @@ Q: '''
     def postprocess_trivia(answer):
         if answer == '': 
             return answer
+        # words = answer.split()
+        # filtered_words = [word for word in words if re.fullmatch(r'[a-zA-Z0-9.,!?\'\"-]+', word)]
+        # answer = ' '.join(filtered_words)
+        answer = ' '.join(answer.split('.')[:-1])
         answer = answer.strip()
         answer = answer.lower().replace('-',' ') #splits hyphenated text
         repl_table = string.punctuation.maketrans("", "", string.punctuation) #remove puntuation marks
@@ -611,14 +660,6 @@ Q: '''
         words = answer.split() 
         filtered_words = [word for word in words if word not in ['a', 'the', 'an']] 
         answer =  ' '.join(filtered_words)
-        return answer
-
-    def process_gsm(answer):
-        # match = re.search(r"#### ([\d,]+\.?\d*)", ans)
-        match = re.search(r"The final answer is ([\d,]+\.?\d*)", answer)
-        if match:
-            value = match.group(1)
-            return value.replace(',','')
         return answer
 
     def process_mmlu(answer):
@@ -634,7 +675,7 @@ Q: '''
             if value == 'D':
                 return 3
         return answer
-    
+
     def match(pred, answers):
         if pred in answers:
             return 1
@@ -657,211 +698,198 @@ Q: '''
             if cur_f1 > f1:
                 f1 = cur_f1
         return f1
-    
-    if data_args.prompt:
-        # logger.info(f'lambda1: {knn_wrapper.lmbda1} knn_temp: {knn_wrapper.knn_temp} k: {knn_wrapper.k}')
-        if not knn_args.knn and not knn_args.retomaton: #for logging
-            knn_args.dstore_size = 0
-            knn_args.lambda1=0
-            knn_args.k = 0
-            knn_args.knn_temp = 0
-        batch_size = 2 if knn_wrapper is not None else 10
-        outputs = []
-        num_beams = 5
-        if 'trivia' in data_args.dataset_name:
-            max_new_tokens = 24 
-        elif 'gsm' in  data_args.dataset_name:
-            max_new_tokens = 512
-        elif 'mmlu' in  data_args.dataset_name:
-            max_new_tokens = 10
-        elif 'eval' in  data_args.dataset_name:
-            max_new_tokens = 10
-        if knn_wrapper is not None:
-            knn_wrapper.batch_size = batch_size
-            knn_wrapper.max_new_tokens = max_new_tokens
-            logger.info(f'max_new_tokens: {knn_wrapper.max_new_tokens}')
-            knn_wrapper.num_beams = num_beams
-            if 'trivia' in data_args.dataset_name:
-                dstore_path = knn_args.dstore_dir + '/0rc.pkl'
-                with open(dstore_path, 'rb') as file:
-                    knn_wrapper.dstore_sizes = pickle.load(file)
-        
-        tokenizer.padding_side='left'
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-        
-        text_generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
-        # raw_datasets[data_args.eval_subset] = raw_datasets[data_args.eval_subset].select(range(1260,2000))
-        logger.info(f'[{data_args.eval_subset}] has {raw_datasets[data_args.eval_subset].num_rows}')
-        input_dataset = raw_datasets[data_args.eval_subset][text_column_name]
-        input_dataset = ListDataset(input_dataset)
-        start = datetime.datetime.now()
-        
-        logger.info(f'Running generation pipeline')
-        # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-        #     with record_function("model_inference"):
-                # model(inputs)
-        outputs = []
-        for out in tqdm(text_generator(input_dataset, batch_size = batch_size, max_new_tokens=max_new_tokens, pad_token_id = tokenizer.eos_token_id, num_beams = num_beams), total = len(input_dataset)):
-            # print(len(out))
-            outputs = outputs + out
-            torch.cuda.empty_cache()
-        logger.info(f'Generating answers took {datetime.datetime.now() - start} s')
-        # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-        # print(outputs)
-        outputs = [op['generated_text'] for op in outputs]
-        
-        answers = []
-        for op, row in zip(outputs, raw_datasets[data_args.eval_subset][text_column_name]):
-            answer = op[len(row):]
-            # answer = answer.split('\n')[0]
-            answers.append(answer)
-        outputs = answers
-        answers = []
-        if 'trivia' in data_args.dataset_name:
-            answers = [postprocess_trivia(op.split('\n')[0]) for op in outputs]
-            # Calculating metrics
-            match_list = [match(pred, ans['normalized_aliases']) for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['answer'])]
-            metric_em = sum(match_list)/raw_datasets[data_args.eval_subset].num_rows*100
-            # print(f'{sum(match_list)}/{raw_datasets[data_args.eval_subset].num_rows},{metric_em}')
-            f1_list = [f1_score(pred, ans['normalized_aliases']) for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['answer'])]
-            metric_f1 = sum(f1_list)/raw_datasets[data_args.eval_subset].num_rows*100
-            if not os.path.exists(training_args.output_dir):
-                os.makedirs(training_args.output_dir)
-            time = datetime.datetime.now()
-            path = training_args.output_dir+"/output"+ time.strftime("%Y-%m-%d_%H:%M:%S") + ".csv"
-            with open(path, mode='w', newline='', encoding='utf-8') as file1:
-                writer = csv.DictWriter(file1, fieldnames=['input', 'output', 'question', 'correct_answers', 'answer', 'exact_match', 'f1'])
-                writer.writeheader()
-                for row, outp, answ, em, f1  in zip(raw_datasets[data_args.eval_subset], outputs, answers, match_list, f1_list):
-                    writer.writerow({'input': row[text_column_name], 'output': outp, 'question' : row['question'], 'correct_answers' : row['answer']['normalized_aliases'], 'answer': answ, 'exact_match': em, 'f1': f1})
-            
-            time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
-            
-            fieldnames = ['time', 'model', 'dataset', 'retomaton', 'knn', 'lambda1', 'lambda2', 'block_size', 'k','knn_temp', 't', 'max_new_tokens', 'dstore_size', 'exact_match','f1', 'notes']
-            metrics_to_file = { 'time': time_st,
-                'model': model_args.model_name_or_path,
-                'dataset': data_args.dataset_name,
-                'retomaton': knn_args.retomaton, 
-                'knn': knn_args.knn, 
-                'lambda1': knn_args.lmbda1,
-                'lambda2' : knn_args.lmbda2, 
-                'block_size': block_size, 
-                'k': knn_args.k,
-                'knn_temp': knn_args.knn_temp,
-                't' : knn_args.t,
-                'max_new_tokens' : max_new_tokens,
-                'dstore_size' : knn_args.dstore_size,
-                'exact_match' : round(metric_em, 2),
-                'f1' : round(metric_f1,2),
-                'notes':  'sample',
-            }
-        elif 'gsm' in data_args.dataset_name:
-            answers = [process_gsm(op) for op in outputs]
-            # for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['extracted_ans']):
-            #     print(pred, ans, pred==ans)
-            acc_list = [1 if ans==pred else 0 for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['extracted_ans'])]
-            accuracy = sum(acc_list)/raw_datasets[data_args.eval_subset].num_rows*100
-            if not os.path.exists(training_args.output_dir):
-                os.makedirs(training_args.output_dir)
-            time = datetime.datetime.now()
-            path = training_args.output_dir+"/output"+ time.strftime("%Y-%m-%d_%H:%M:%S") + ".csv"
-            with open(path, mode='w', newline='', encoding='utf-8') as file1:
-                writer = csv.DictWriter(file1, fieldnames=['input', 'output', 'question', 'answer', 'pred', 'accuracy'])
-                writer.writeheader()
-                for row, outp, answ, acc  in zip(raw_datasets[data_args.eval_subset], outputs, answers, acc_list):
-                    writer.writerow({'input': row[text_column_name], 'output': outp, 'question' : row['question'], 'answer' : row['answer'], 'pred': answ, 'accuracy': acc})
-            
-            time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
-            
-            fieldnames = ['time', 'model', 'dataset', 'dstore_path' ,'knn', 'retomaton','lambda', 'k','knn_temp', 'dstore_size', 'accuracy', 'notes']
-            metrics_to_file = { 'time': time_st,
-                'model': model_args.model_name_or_path,
-                'dataset': data_args.dataset_name,
-                'dstore_path': knn_args.dstore_dir if knn_wrapper is not None else 'None',
-                'knn': knn_args.knn, 
-                'retomaton': knn_args.retomaton,
-                'lambda': knn_args.lmbda1 if knn_wrapper is not None else 0, 
-                'k': knn_args.k if knn_wrapper is not None else 0,
-                'knn_temp': knn_args.knn_temp if knn_wrapper is not None else 0,
-                'dstore_size' : knn_args.dstore_size if knn_wrapper is not None else 0,
-                'accuracy' : round(accuracy, 2),
-                'notes':  'kNN/reto_' + str(len(input_dataset)) if knn_wrapper is not None else 'Base_' + str(len(input_dataset)),
-            }
-        elif 'mmlu' in data_args.dataset_name:
-            answers = [process_mmlu(op) for op in outputs]
-            acc_list = [1 if ans==pred else 0 for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['answer'])]
-            accuracy = sum(acc_list)/raw_datasets[data_args.eval_subset].num_rows*100
-            if not os.path.exists(training_args.output_dir):
-                os.makedirs(training_args.output_dir)
-            time = datetime.datetime.now()
-            path = training_args.output_dir+"/output"+ time.strftime("%Y-%m-%d_%H:%M:%S") + ".csv"
-            with open(path, mode='w', newline='', encoding='utf-8') as file1:
-                writer = csv.DictWriter(file1, fieldnames=['input', 'output', 'question', 'answer', 'pred', 'accuracy'])
-                writer.writeheader()
-                for row, outp, answ, acc  in zip(raw_datasets[data_args.eval_subset], outputs, answers, acc_list):
-                    writer.writerow({'input': row[text_column_name], 'output': outp, 'question' : row['question'], 'answer' : row['answer'], 'pred': answ, 'accuracy': acc})
-            
-            time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
-            
-            fieldnames = ['time', 'model', 'dataset', 'dstore_path' ,'knn', 'retomaton','lambda', 'k','knn_temp', 'dstore_size', 'accuracy', 'notes']
-            metrics_to_file = { 'time': time_st,
-                'model': model_args.model_name_or_path,
-                'dataset': data_args.dataset_name,
-                'dstore_path': knn_args.dstore_dir if knn_wrapper is not None else 'None',
-                'knn': knn_args.knn, 
-                'retomaton': knn_args.retomaton,
-                'lambda': knn_args.lmbda1 if knn_wrapper is not None else 0, 
-                'k': knn_args.k if knn_wrapper is not None else 0,
-                'knn_temp': knn_args.knn_temp if knn_wrapper is not None else 0,
-                'dstore_size' : knn_args.dstore_size if knn_wrapper is not None else 0,
-                'accuracy' : round(accuracy, 2),
-                'notes':  'kNN/reto_' + str(len(input_dataset)) if knn_wrapper is not None else 'Base_' + str(len(input_dataset)),
-            }
-        elif 'eval' in data_args.dataset_name:
-            answers = [op.split('\n')[0] for op in outputs]
-            # for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['extracted_ans']):
-            #     print(pred, ans, pred==ans)
-            acc_list = [1 if ans[0]==pred else 0 for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['input_correct_responses'])]
-            accuracy = sum(acc_list)/raw_datasets[data_args.eval_subset].num_rows*100
-            if not os.path.exists(training_args.output_dir):
-                os.makedirs(training_args.output_dir)
-            time = datetime.datetime.now()
-            path = training_args.output_dir+"/output"+ time.strftime("%Y-%m-%d_%H:%M:%S") + ".csv"
-            with open(path, mode='w', newline='', encoding='utf-8') as file1:
-                writer = csv.DictWriter(file1, fieldnames=['input', 'output', 'question', 'answer', 'pred', 'accuracy'])
-                writer.writeheader()
-                for row, outp, answ, acc  in zip(raw_datasets[data_args.eval_subset], outputs, answers, acc_list):
-                    writer.writerow({'input': row[text_column_name], 'output': outp, 'question' : row['input_question'], 'answer' : row['input_correct_responses'], 'pred': answ, 'accuracy': acc})
-            
-            time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
-            
-            fieldnames = ['time', 'model', 'dataset', 'dstore_path' ,'knn', 'retomaton','lambda', 'k','knn_temp', 'dstore_size', 'accuracy', 'notes']
-            metrics_to_file = { 'time': time_st,
-                'model': model_args.model_name_or_path,
-                'dataset': data_args.dataset_name,
-                'dstore_path': knn_args.dstore_dir if knn_wrapper is not None else 'None',
-                'knn': knn_args.knn, 
-                'retomaton': knn_args.retomaton,
-                'lambda': knn_args.lmbda1 if knn_wrapper is not None else 0, 
-                'k': knn_args.k if knn_wrapper is not None else 0,
-                'knn_temp': knn_args.knn_temp if knn_wrapper is not None else 0,
-                'dstore_size' : knn_args.dstore_size if knn_wrapper is not None else 0,
-                'accuracy' : round(accuracy, 2),
-                'notes':  'kNN/reto_' + str(len(input_dataset)) if knn_wrapper is not None else 'Base_' + str(len(input_dataset)),
-            }
-        logger.info(metrics_to_file)
-        fieldnames = list(metrics_to_file.keys())
-        csv_file = training_args.output_dir+"/runs.csv"
 
-        if not os.path.isfile(csv_file):
-            with open(csv_file, mode='w', newline='', encoding='utf-8') as file:
-                writer = csv.DictWriter(file, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerow(metrics_to_file)
-        else:
-            with open(csv_file, mode='a', newline='', encoding='utf-8') as file:
-                writer = csv.DictWriter(file, fieldnames=fieldnames)
-                writer.writerow(metrics_to_file)
+    param_df = pd.read_csv('params.csv', header=0)
+    param_df = param_df.fillna(0)
+
+    for k in param_df['k']:
+        if k == 0:
+            continue
+        for lmbda1 in param_df['lmbda1'][1:]:
+            if lmbda1 == 0:
+                continue
+            for knn_temp in param_df['knn_temp']:
+                if knn_temp == 0:
+                    continue
+                knn_wrapper.lmbda1 = lmbda1
+                knn_args.lmbda1 = lmbda1
+                knn_wrapper.knn_temp = knn_temp
+                knn_args.knn_temp = knn_temp
+                knn_wrapper.k = int(k)
+                knn_args.k = int(k)
+                if data_args.prompt:
+                    logger.info(f'lambda1: {knn_wrapper.lmbda1} knn_temp: {knn_wrapper.knn_temp} k: {knn_wrapper.k}')
+                    batch_size = 2 if knn_wrapper is not None else 16
+                    outputs = []
+                    num_beams = 5
+                    if 'trivia' in data_args.dataset_name:
+                        max_new_tokens = 24 
+                    elif 'gsm' in  data_args.dataset_name:
+                        max_new_tokens = 512
+                    elif 'mmlu' in  data_args.dataset_name:
+                        max_new_tokens = 10
+                    elif 'eval' in  data_args.dataset_name:
+                        max_new_tokens = 10
+                    if knn_wrapper is not None:
+                        knn_wrapper.batch_size = batch_size
+                        knn_wrapper.max_new_tokens = max_new_tokens
+                        logger.info(f'max_new_tokens: {knn_wrapper.max_new_tokens}')
+                        knn_wrapper.num_beams = num_beams
+                        if 'trivia' in data_args.dataset_name:
+                            dstore_path = knn_args.dstore_dir + '/0rc.pkl'
+                            with open(dstore_path, 'rb') as file:
+                                knn_wrapper.dstore_sizes = pickle.load(file)
+                    
+                    tokenizer.padding_side='left'
+                    tokenizer.pad_token_id = tokenizer.eos_token_id
+                    
+                    text_generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
+                    
+                    # raw_datasets[data_args.eval_subset] = raw_datasets[data_args.eval_subset].select(range(144,1000))
+                    logger.info(f'[{data_args.eval_subset}] has {raw_datasets[data_args.eval_subset].num_rows}')
+                    input_dataset = raw_datasets[data_args.eval_subset][text_column_name]
+                    input_dataset = ListDataset(input_dataset)
+                    start = datetime.datetime.now()
+                    
+                    logger.info(f'Running generation pipeline')
+                    # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
+                    #     with record_function("model_inference"):
+                            # model(inputs)
+                    outputs = []
+                    for out in tqdm(text_generator(input_dataset, batch_size = batch_size, max_new_tokens=max_new_tokens, pad_token_id = tokenizer.eos_token_id, num_beams = num_beams), total = len(input_dataset)):
+                        # print(len(out))
+                        outputs = outputs + out
+                        torch.cuda.empty_cache()
+                    logger.info(f'Generating answers took {datetime.datetime.now() - start} s')
+                    # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+                    # print(outputs)
+                    outputs = [op['generated_text'] for op in outputs]
+                    
+                    answers = []
+                    for op, row in zip(outputs, raw_datasets[data_args.eval_subset][text_column_name]):
+                        answer = op[len(row):]
+                        # answer = answer.split('\n')[0]
+                        answers.append(answer)
+                    if knn_args.dstore_size is None:
+                        knn_args.dstore_size = 0
+                        knn_args.lmbda2 = 0
+                        knn_args.t = 0
+                    outputs = answers
+                    answers = []
+                    if 'trivia' in data_args.dataset_name:
+                        answers = [postprocess_trivia(op.split('\n')[0]) for op in outputs]
+                        # Calculating metrics
+                        match_list = [match(pred, ans['normalized_aliases']) for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['answer'])]
+                        metric_em = sum(match_list)/raw_datasets[data_args.eval_subset].num_rows*100
+                        # print(f'{sum(match_list)}/{raw_datasets[data_args.eval_subset].num_rows},{metric_em}')
+                        f1_list = [f1_score(pred, ans['normalized_aliases']) for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['answer'])]
+                        metric_f1 = sum(f1_list)/raw_datasets[data_args.eval_subset].num_rows*100
+                        if not os.path.exists(training_args.output_dir):
+                            os.makedirs(training_args.output_dir)
+                        time = datetime.datetime.now()
+                        path = training_args.output_dir+"/output"+ time.strftime("%Y-%m-%d_%H:%M:%S") + ".csv"
+                        with open(path, mode='w', newline='', encoding='utf-8') as file1:
+                            writer = csv.DictWriter(file1, fieldnames=['input', 'output', 'question', 'correct_answers', 'answer', 'exact_match', 'f1'])
+                            writer.writeheader()
+                            for row, outp, answ, em, f1  in zip(raw_datasets[data_args.eval_subset], outputs, answers, match_list, f1_list):
+                                writer.writerow({'input': row[text_column_name], 'output': outp, 'question' : row['question'], 'correct_answers' : row['answer']['normalized_aliases'], 'answer': answ, 'exact_match': em, 'f1': f1})
+                        
+                        time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
+                        
+                        fieldnames = ['time', 'model', 'dataset', 'retomaton', 'knn', 'lambda1', 'lambda2', 'block_size', 'k','knn_temp', 't', 'max_new_tokens', 'dstore_size', 'exact_match','f1', 'notes']
+                        metrics_to_file = { 'time': time_st,
+                            'model': model_args.model_name_or_path,
+                            'dataset': data_args.dataset_name,
+                            'retomaton': knn_args.retomaton, 
+                            'knn': knn_args.knn, 
+                            'lambda1': knn_args.lmbda1,
+                            'lambda2' : knn_args.lmbda2, 
+                            'block_size': block_size, 
+                            'k': knn_args.k,
+                            'knn_temp': knn_args.knn_temp,
+                            't' : knn_args.t,
+                            'max_new_tokens' : max_new_tokens,
+                            'dstore_size' : knn_args.dstore_size,
+                            'exact_match' : round(metric_em, 2),
+                            'f1' : round(metric_f1,2),
+                            'notes':  'sample',
+                        }
+                    elif 'gsm' in data_args.dataset_name:
+                        answers = [process_gsm(op) for op in outputs]
+                        # for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['extracted_ans']):
+                        #     print(pred, ans, pred==ans)
+                        acc_list = [1 if ans==pred else 0 for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['extracted_ans'])]
+                        accuracy = sum(acc_list)/raw_datasets[data_args.eval_subset].num_rows*100
+                        if not os.path.exists(training_args.output_dir):
+                            os.makedirs(training_args.output_dir)
+                        time = datetime.datetime.now()
+                        path = training_args.output_dir+"/output"+ time.strftime("%Y-%m-%d_%H:%M:%S") + ".csv"
+                        with open(path, mode='w', newline='', encoding='utf-8') as file1:
+                            writer = csv.DictWriter(file1, fieldnames=['input', 'output', 'question', 'answer', 'pred', 'accuracy'])
+                            writer.writeheader()
+                            for row, outp, answ, acc  in zip(raw_datasets[data_args.eval_subset], outputs, answers, acc_list):
+                                writer.writerow({'input': row['inputs'], 'output': outp, 'question' : row['question'], 'answer' : row['answer'], 'pred': answ, 'accuracy': acc})
+                        
+                        time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
+                        
+                        fieldnames = ['time', 'model', 'dataset', 'dstore_path', 'knn', 'retomaton', 'lambda', 'k','knn_temp', 'dstore_size', 'accuracy', 'notes']
+                        metrics_to_file = metrics_to_file = { 'time': time_st,
+                            'model': model_args.model_name_or_path,
+                            'dataset': data_args.dataset_name,
+                            'dstore_path': knn_args.dstore_dir if knn_wrapper is not None else 'None',
+                            'knn': knn_args.knn, 
+                            'retomaton': knn_args.retomaton,
+                            'lambda': knn_args.lmbda1 if knn_wrapper is not None else 0, 
+                            'k': knn_args.k if knn_wrapper is not None else 0,
+                            'knn_temp': knn_args.knn_temp if knn_wrapper is not None else 0,
+                            'dstore_size' : knn_args.dstore_size if knn_wrapper is not None else 0,
+                            'accuracy' : round(accuracy, 2),
+                            'notes':  'kNN_' + str(len(input_dataset)) if knn_wrapper is not None else 'Base_' + str(len(input_dataset)),
+                        }
+                    elif 'mmlu' in data_args.dataset_name:
+                        answers = [process_mmlu(op) for op in outputs]
+                        acc_list = [1 if ans==pred else 0 for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['answer'])]
+                        accuracy = sum(acc_list)/raw_datasets[data_args.eval_subset].num_rows*100
+                        if not os.path.exists(training_args.output_dir):
+                            os.makedirs(training_args.output_dir)
+                        time = datetime.datetime.now()
+                        path = training_args.output_dir+"/output"+ time.strftime("%Y-%m-%d_%H:%M:%S") + ".csv"
+                        with open(path, mode='w', newline='', encoding='utf-8') as file1:
+                            writer = csv.DictWriter(file1, fieldnames=['input', 'output', 'question', 'answer', 'pred', 'accuracy'])
+                            writer.writeheader()
+                            for row, outp, answ, acc  in zip(raw_datasets[data_args.eval_subset], outputs, answers, acc_list):
+                                writer.writerow({'input': row[text_column_name], 'output': outp, 'question' : row['question'], 'answer' : row['answer'], 'pred': answ, 'accuracy': acc})
+                        
+                        time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
+                        
+                        fieldnames = ['time', 'model', 'dataset', 'dstore_path' ,'knn', 'retomaton','lambda', 'k','knn_temp', 'dstore_size', 'accuracy', 'notes']
+                        metrics_to_file = { 'time': time_st,
+                            'model': model_args.model_name_or_path,
+                            'dataset': data_args.dataset_name,
+                            'dstore_path': knn_args.dstore_dir if knn_wrapper is not None else 'None',
+                            'knn': knn_args.knn, 
+                            'retomaton': knn_args.retomaton,
+                            'lambda': knn_args.lmbda1 if knn_wrapper is not None else 0, 
+                            'k': knn_args.k if knn_wrapper is not None else 0,
+                            'knn_temp': knn_args.knn_temp if knn_wrapper is not None else 0,
+                            'dstore_size' : knn_args.dstore_size if knn_wrapper is not None else 0,
+                            'accuracy' : round(accuracy, 2),
+                            'notes':  'kNN/reto_' + str(len(input_dataset)) if knn_wrapper is not None else 'Base_' + str(len(input_dataset)),
+                        }
+                    logger.info(metrics_to_file)
+                    fieldnames = list(metrics_to_file.keys())
+                    csv_file =  training_args.output_dir+"/runs.csv"
+
+
+                    if not os.path.isfile(csv_file):
+                        with open(csv_file, mode='w', newline='', encoding='utf-8') as file:
+                            writer = csv.DictWriter(file, fieldnames=fieldnames)
+                            writer.writeheader()
+                            writer.writerow(metrics_to_file)
+                    else:
+                        with open(csv_file, mode='a', newline='', encoding='utf-8') as file:
+                            writer = csv.DictWriter(file, fieldnames=fieldnames)
+                            writer.writerow(metrics_to_file)
 
     if knn_args.build_index:
         knn_wrapper.build_index()
