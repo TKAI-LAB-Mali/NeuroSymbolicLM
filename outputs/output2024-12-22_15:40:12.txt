@@ -1,7 +1,0 @@
-retomaton: True knn: False lambda: 0.25 block_size: 768, k: 1024, knn_temp: 1.0
-Metrics with answer: {'exact_match': 0.0, 'partial_match': 23.7, 'bleu': 0.5789}
-Metrics with aliases: {'exact_match': 0.0, 'partial_match': 27.2, 'bleu': 1.1906}
-Input format: None <question> None
-
-What musician formed a singing duo with Art Garfunkel in 1963? True: Paul Simon pred:  Simon and Garfunkel
-Q: What is the name of the head

@@ -6,6 +6,7 @@ import pickle
 import time
 import numpy as np
 import torch
+from transformers.generation import utils
 from torch import nn
 from enum import Enum, auto
 from pathlib import Path
@@ -21,6 +22,9 @@ import faiss.contrib.torch_utils
 from faiss import IndexFlatL2
 import scipy.sparse as sp
 
+
+from transformers import AutoTokenizer
+
 logger = logging.getLogger(__name__)
 logger.setLevel(20)
 
@@ -30,9 +34,15 @@ class RetomatonWrapper(KNNWrapper):
         self.no_pointer = no_pointer
         self.min_knns = min_knns
         self.max_knns = max_knns
+        # self.load_retomaton(members)
+        self.tokenizer = AutoTokenizer.from_pretrained('meta-llama/Llama-3.2-1B')
 
+    def load_retomaton(self, members=None):
         if members is None:
-            available_member_files = glob.glob(f'{self.dstore_dir}/members*')
+            if self.dstore_damb is None:
+                available_member_files = glob.glob(f'{self.dstore_dir}/members_*_{self.dstore_size}_{self.dimension}*')
+            else:
+                available_member_files = glob.glob(f'{self.dstore_dir}/members_*_{self.dstore_size}_{self.dimension}_{self.dstore_damb}*')
             if len(available_member_files) == 0:
                 logger.info(f'No member files found in {self.dstore_dir}, not using clustering')
             else:
@@ -48,49 +58,69 @@ class RetomatonWrapper(KNNWrapper):
             members_for_indices = np.nonzero(self.members[np.arange(self.members.shape[0])])
             self.cluster = torch.zeros((self.dstore_size, ), dtype=torch.int32).to(self.device)
             self.cluster[members_for_indices[1]] = torch.from_numpy(members_for_indices[0]).to(self.device)
-
-        self.generate_cur_knns = torch.tensor([], dtype=torch.int64)
-        self.generate_cur_dists = torch.tensor([], dtype=torch.float32)
+        self.generate_cur_knns = None
+        self.no_lookup_counter = 0
         self.no_lookup_counter_history = []
 
+    def pre_forward_hook(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
+        if labels is None:
+            self.labels = input_ids.to(self.device)
+        else:
+            self.labels = labels.to(self.device)       
+        return self.original_forward_func(input_ids=input_ids, labels=labels, attention_mask=attention_mask, **kwargs)
+
     def post_forward_hook(self, module, input, output):
+        batch, time_dim, vocab_size = output.shape
         shift = 0 if self.is_encoder_decoder else 1
-        if self.labels is None:
-            # In "generate" mode, we don't support yet tracking of the beam search hypotheses across time,
-            # which we need to track in order to implement RetoMaton correctly. 
-            # In the meantime, use kNN-LM's generate
-            return super().post_forward_hook(module, input, output)
 
         lm_logits = output
         lm_logits = torch.nn.functional.log_softmax(lm_logits, dim=-1) # (batch, time, vocab)
-        queries = self.activation_capturer.captured # (batch, time, dim) 
-        
-        shifted_labels = self.labels[:, shift:]
-        nonpad_mask = torch.cat([
-            shifted_labels != -100, 
-            torch.zeros([self.labels.shape[0], shift], dtype=torch.bool).to(self.device)
-        ], axis=-1)
-        captured_labels = shifted_labels[shifted_labels != -100] # (nonpad)
+        queries = self.activation_capturer.captured.to(self.device) # (batch, time, dim) 
 
+        if self.labels.shape[1]>1:
+            # New batch for generation. Emptying the pointers and neighbors
+            self.generate_cur_knns = [] #torch.tensor([], dtype=torch.int64)
+        else:
+            order = utils.get_retoMaton_beam_idx()
+            reordered_curr_knns = [self.generate_cur_knns[i] for i in order]
+            reordered_vals_at_knns = [self.all_vals_at_knns[i] for i in order]
+            self.generate_cur_knns = reordered_curr_knns
+            self.all_vals_at_knns =  reordered_vals_at_knns
+            for idx, (lab, vals) in enumerate(zip(self.labels, self.all_vals_at_knns)):
+                knns = self.generate_cur_knns[idx]
+                vals_are_correct_and_pointer_available = (vals == lab) & (knns < self.dstore_size - 1)
+                self.generate_cur_knns[idx] = knns[vals_are_correct_and_pointer_available]
+             
+        nonpad_mask = torch.cat([
+            torch.zeros([batch, time_dim - 1], dtype=torch.bool),
+            torch.ones([batch, 1], dtype=torch.bool),
+        ], axis=-1).to(self.device)
+
+        captured_labels = None
         queries = queries[nonpad_mask] # (nonpad, dim)
         lm_logits = lm_logits[nonpad_mask] # (nonpad, vocab)
 
         all_knn_probs = []
-        cur_knns = torch.tensor([], dtype=torch.int64)
-        cur_dists = torch.tensor([], dtype=torch.float32)
-        no_lookup_counter = 0
-
-        for timestep_query, label in zip_longest(queries, captured_labels):
+        self.all_vals_at_knns = []
+        
+        for idx, timestep_query in enumerate(queries):
             perform_search = False
             extended_pointers = None
+            if len(self.generate_cur_knns)<queries.shape[0]:
+                cur_knns = torch.tensor([], dtype=torch.int64)
+            else:
+                temp_knns = self.generate_cur_knns[idx]
+                valid_mask = temp_knns != -1
+                cur_knns = temp_knns[valid_mask]
             pointers = cur_knns + 1
-
+            if (pointers == self.dstore_size).any():
+                pointers[pointers == self.dstore_size] = self.dstore_size-1
             if self.no_pointer or cur_knns.numel() < self.min_knns:
                 perform_search = True
-                self.no_lookup_counter_history.append(no_lookup_counter)
-                no_lookup_counter = 0
+                self.no_lookup_counter_history.append(self.no_lookup_counter)
+                self.no_lookup_counter = 0
             else:
-                no_lookup_counter += 1
+                self.no_lookup_counter += 1
 
             if self.no_pointer:
                 extended_pointers = None
@@ -104,17 +134,27 @@ class RetomatonWrapper(KNNWrapper):
                 timestep_query, 
                 pointers=extended_pointers,
                 perform_search=perform_search)
-
+            # logger.info(f'Beam {idx}: knns: {vals_at_knns}\n val indices: {knns}')
+            # logger.info(f'Neighbour: {self.tokenizer.decode((self.vals[knns[0]-10:knns[0]+1].squeeze()))}')
             all_knn_probs.append(cur_knn_log_prob)
+            self.all_vals_at_knns.append(vals_at_knns)
             
-            if not self.no_pointer and label is not None:
-                vals_are_correct_and_pointer_available = (vals_at_knns == label) & (knns < self.dstore_size - 1)
-                cur_knns = knns[vals_are_correct_and_pointer_available]
-                cur_dists = dists[vals_are_correct_and_pointer_available]
-                cur_knns = cur_knns[cur_dists.argsort(descending=True)]
+            if not self.no_pointer:
+                cur_knns = knns[dists.argsort(descending=True)].unsqueeze(0)
+                if len(self.generate_cur_knns) < queries.shape[0]:
+                    self.generate_cur_knns.append(cur_knns)
+                else:
+                    self.generate_cur_knns[idx] = cur_knns
+            # logger.info(f'Beam {idx} Neighbour: {self.tokenizer.decode((self.vals[cur_knns.squeeze(0)[0]-10:cur_knns.squeeze(0)[0]].squeeze()))}"{self.tokenizer.decode((self.vals[cur_knns.squeeze(0)[0]]))}"')
+            # try:
+            #     logger.info(f'Beam {idx} Neighbour: {self.tokenizer.decode((self.vals[cur_knns.squeeze(0)[1]-10:cur_knns.squeeze(0)[1]].squeeze()))}"{self.tokenizer.decode((self.vals[cur_knns.squeeze(0)[1]]))}"')
+            # except IndexError:
+            #     logger.info('')
 
-        interpolated_scores = KNNWrapper.interpolate(torch.stack(all_knn_probs), lm_logits, self.lmbda) # (nonpad, vocab)
+        interpolated_scores = KNNWrapper.interpolate(torch.stack(all_knn_probs), lm_logits, self.lmbda1) # (nonpad, vocab)
         output[nonpad_mask] = interpolated_scores
+        del pointers
+        torch.cuda.empty_cache()
         return output
 
     def get_knn_log_prob(self, query, pointers, perform_search):
@@ -143,6 +183,7 @@ class RetomatonWrapper(KNNWrapper):
         return knn_log_probs, knns, neg_dists, vals_at_knns
 
     def extend_pointers_using_clusters(self, pointers):
+        # logger.info(f'Extending pointers')
         if pointers.numel() == 0:
             return pointers
         # Don't take the same cluster twice
@@ -159,6 +200,7 @@ class RetomatonWrapper(KNNWrapper):
         return extended_pointers
 
     def reconstruct_ids(self, ids):
+        # logger.info(f'Reconstructing keys')
         # Converting to numpy only because GPU indexes do not support reconstructing vectors:
         # https://github.com/facebookresearch/faiss/issues/2181
         ids = ids.cpu().numpy()
@@ -189,6 +231,7 @@ class RetomatonWrapper(KNNWrapper):
     def cluster_dstore(self, num_clusters, sample_size, model, batch_size=500000):
         keys_vals_prefix = get_dstore_path(self.dstore_dir, model.config.model_type, self.dstore_size, self.dimension, self.dstore_damb)
         keys = np.memmap(f'{keys_vals_prefix}_keys.npy', dtype=np.float16, mode='r', shape=(self.dstore_size, self.dimension))
+        # vals = np.memmap(f'{keys_vals_prefix}_vals.npy', dtype=np.int32, mode='r',shape=(self.dstore_size, 1))
 
         if sample_size > self.dstore_size:
             logger.info('Taking all data for training')
@@ -196,16 +239,17 @@ class RetomatonWrapper(KNNWrapper):
         else:
             idx = np.random.RandomState(1).choice(np.arange(self.dstore_size), size=sample_size, replace=False)
             to_cluster = keys[idx]
-
+        # print(vals[:])
         to_cluster = to_cluster.astype(np.float32)
         logger.info(f'Starting to cluster {sample_size} examples into {num_clusters} clusters')
         kmeans = faiss.Kmeans(self.dimension, num_clusters, niter=20, verbose=True, gpu=True, seed=1)
         kmeans.train(to_cluster)
-
+        # print(kmeans.centroids)
         logger.info(f'Done training, assigning {self.dstore_size} examples to the clusters')
 
         index = IndexFlatL2(self.dimension)
         index.add(kmeans.centroids)
+        print(len(kmeans.centroids))
         logger.info('Index created, added centroids')
         if torch.cuda.is_available() and torch.cuda.device_count() > 0:
             logger.info('Moving index to GPU')
@@ -227,24 +271,27 @@ class RetomatonWrapper(KNNWrapper):
                 print('Assigned %d tokens so far' % start)
 
         centroid_ids = np.concatenate(centroid_ids)
-
+        print(centroid_ids)
         logger.info('Processing the mapping of cluster->members')
         parent_cluster = centroid_ids
         cluster_to_members = defaultdict(set)
         for key_i, cluster in tqdm(enumerate(parent_cluster), total=self.dstore_size):
             cluster_to_members[cluster.item()].add(key_i)
 
-        row_ind = [k for k, v in cluster_to_members.items() for _ in range(len(v))]
-        col_ind = [i for ids in cluster_to_members.values() for i in ids]
-        members_sp = sp.csr_matrix(([1]*len(row_ind), (row_ind, col_ind)))
+        if len(cluster_to_members)>1:
+            row_ind = [k for k, v in cluster_to_members.items() for _ in range(len(v))]
+            col_ind = [i for ids in cluster_to_members.values() for i in ids]
+            members_sp = sp.csr_matrix(([1]*len(row_ind), (row_ind, col_ind)))
 
-        members_filename = get_members_path(self.dstore_dir, 
-            model.config.model_type, self.dstore_size, self.dimension,
-            sample_size, num_clusters,self.dstore_damb)
-        with open(members_filename, 'wb') as f:
-            pickle.dump(members_sp, f)
+            members_filename = get_members_path(self.dstore_dir, 
+                model.config.model_type, self.dstore_size, self.dimension,
+                sample_size, num_clusters,self.dstore_damb)
+            with open(members_filename, 'wb') as f:
+                pickle.dump(members_sp, f)
 
-        logger.info(f'Done, found {len(cluster_to_members)} clusters, written to {members_filename}')
+            logger.info(f'Done, found {len(cluster_to_members)} clusters, written to {members_filename}')
+        else:
+            logger.info(f'Only found {len(cluster_to_members)} clusters skipping clustering')
 
 def get_members_path(dstore_dir, model_type, dstore_size, dimension, sample_size, num_clusters, dstore_damb):
     if dstore_damb is None:

@@ -325,6 +325,9 @@ def main():
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
+    # torch.manual_seed(training_args.seed)
+    # if torch.cuda.is_available():
+    #     torch.cuda.manual_seed_all(training_args.seed)
 
     # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
     # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
@@ -423,6 +426,8 @@ def main():
         model = AutoModelForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             from_tf=bool(".ckpt" in model_args.model_name_or_path),
+            device_map= "auto",
+            low_cpu_mem_usage=True,
             config=config,
             cache_dir=model_args.cache_dir,
             revision=model_args.model_revision,
@@ -432,9 +437,9 @@ def main():
         model = AutoModelForCausalLM.from_config(config)
         n_params = sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
-    if torch.cuda.is_available():
-        model.to('cuda')
+    
     logger.info(f'Model assigned to {model.device}')
+    # logger.info(model.hf_device_map)
     model.resize_token_embeddings(len(tokenizer))
 
     # Injecting KNN
@@ -493,7 +498,8 @@ Q: '''
         return triviaq
     
     def format_gsm(example):
-        # Answer the following question through careful, concise step-by-step reasoning:\nQuestion: {question}\nSolution: {_target}
+        # prompt = "Given the following problem, reason and give a final answer to the problem.\nProblem: There are 15 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 21 trees. How many trees did the grove workers plant today?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.\n\nThere are 15 trees originally. Then there were 21 trees after some more were planted. So there must have been 21 - 15 = 6. The final answer is 6\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: If there are 3 cars in the parking lot and 2 more cars arrive, how many cars are in the parking lot?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.\n\nThere are originally 3 cars. 2 more cars arrive. 3 + 2 = 5. The final answer is 5\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Leah had 32 chocolates and her sister had 42. If they ate 35, how many pieces do they have left in total?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.\n\nOriginally, Leah had 32 chocolates. Her sister had 42. So in total they had 32 + 42 = 74. After eating 35, they had 74 - 35 = 39. The final answer is 39\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Jason had 20 lollipops. He gave Denny some lollipops. Now Jason has 12 lollipops. How many lollipops did Jason give to Denny?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.\n\nJason started with 20 lollipops. Then he had 12 after giving some to Denny. So he gave Denny 20 - 12 = 8. The final answer is 8\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Shawn has five toys. For Christmas, he got two toys each from his mom and dad. How many toys does he have now?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.\n\nShawn started with 5 toys. If he got 2 toys each from his mom and dad, then that is 4 more toys. 5 + 4 = 9. The final answer is 9\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: There were nine computers in the server room. Five more computers were installed each day, from monday to thursday. How many computers are now in the server room?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.\n\nThere were originally 9 computers. For each of 4 days, 5 more computers were added. So 5 * 4 = 20 computers were added. 9 + 20 is 29. The final answer is 29\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Michael had 58 golf balls. On tuesday, he lost 23 golf balls. On wednesday, he lost 2 more. How many golf balls did he have at the end of wednesday?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.\n\nMichael started with 58 golf balls. After losing 23 on tuesday, he had 58 - 23 = 35. After losing 2 more, he had 35 - 2 = 33 golf balls. The final answer is 33\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Olivia has $23. She bought five bagels for $3 each. How much money does she have left?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.\n\nOlivia had 23 dollars. 5 bagels for 3 dollars each will be 5 x 3 = 15 dollars. So she has 23 - 15 dollars left. 23 - 15 is 8. The final answer is 8\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: "
+        # text = prompt + f"{example['question']}\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.\n\n"
         prompt = "<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: There are 15 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 21 trees. How many trees did the grove workers plant today?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nThere are 15 trees originally. Then there were 21 trees after some more were planted. So there must have been 21 - 15 = 6. The final answer is 6<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: If there are 3 cars in the parking lot and 2 more cars arrive, how many cars are in the parking lot?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nThere are originally 3 cars. 2 more cars arrive. 3 + 2 = 5. The final answer is 5<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Leah had 32 chocolates and her sister had 42. If they ate 35, how many pieces do they have left in total?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nOriginally, Leah had 32 chocolates. Her sister had 42. So in total they had 32 + 42 = 74. After eating 35, they had 74 - 35 = 39. The final answer is 39<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Jason had 20 lollipops. He gave Denny some lollipops. Now Jason has 12 lollipops. How many lollipops did Jason give to Denny?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nJason started with 20 lollipops. Then he had 12 after giving some to Denny. So he gave Denny 20 - 12 = 8. The final answer is 8<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Shawn has five toys. For Christmas, he got two toys each from his mom and dad. How many toys does he have now?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nShawn started with 5 toys. If he got 2 toys each from his mom and dad, then that is 4 more toys. 5 + 4 = 9. The final answer is 9<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: There were nine computers in the server room. Five more computers were installed each day, from monday to thursday. How many computers are now in the server room?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nThere were originally 9 computers. For each of 4 days, 5 more computers were added. So 5 * 4 = 20 computers were added. 9 + 20 is 29. The final answer is 29<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Michael had 58 golf balls. On tuesday, he lost 23 golf balls. On wednesday, he lost 2 more. How many golf balls did he have at the end of wednesday?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nMichael started with 58 golf balls. After losing 23 on tuesday, he had 58 - 23 = 35. After losing 2 more, he had 35 - 2 = 33 golf balls. The final answer is 33<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: Olivia has $23. She bought five bagels for $3 each. How much money does she have left?\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\nOlivia had 23 dollars. 5 bagels for 3 dollars each will be 5 x 3 = 15 dollars. So she has 23 - 15 dollars left. 23 - 15 is 8. The final answer is 8<|eot_id|>\n<|start_header_id|>user<|end_header_id|>\n\nGiven the following problem, reason and give a final answer to the problem.\nProblem: "
         text = prompt + f"{example['question']}\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\n"
         example['inputs'] = text
@@ -506,8 +512,12 @@ Q: '''
     
     def format_mmlu(mmlu):
         prefix = prompt_prefix[mmlu['subject']]
-        mmlu['input'] = prefix +'\n\n' +mmlu['question'] + '\nA. ' + mmlu['choices'][0] + '\nB. ' + mmlu['choices'][1] + '\nC. ' + mmlu['choices'][2] + '\nD. ' + mmlu['choices'][3] #+ '\n'
+        # prefix = "The following are multiple choice questions (with answers) about anatomy. Choose the correct answer by selecting the letter only (A, B, C, or D)."
+        mmlu['input'] = prefix +'\n\n' +mmlu['question'] + '\nA. ' + mmlu['choices'][0] + '\nB. ' + mmlu['choices'][1] + '\nC. ' + mmlu['choices'][2] + '\nD. ' + mmlu['choices'][3] #+ '\nAnswer:'
         return mmlu
+    
+    def filter_by_word_count(example):
+        return len(example[text_column_name].split()) <= 1024
 
     def format_eval(mmlu):
         mmlu['input_final_prompts'] = mmlu['input_final_prompts'][0][:-9]
@@ -522,7 +532,7 @@ Q: '''
                 desc="dataset map context",
             )
         raw_datasets = raw_datasets.remove_columns(['entity_pages','search_results'])
-        column_names = raw_datasets.column_names
+        column_names = raw_datasets[data_args.eval_subset].column_names
         text_column_name = 'input_final_prompts' if 'input_final_prompts' in column_names else column_names[0]
     
     elif 'gsm' in data_args.dataset_name:
@@ -549,6 +559,9 @@ Q: '''
         column_names = raw_datasets[data_args.eval_subset].column_names
         print(column_names)
         text_column_name = 'input' if 'input' in column_names else column_names[0]
+        if 'google' in model_args.model_name_or_path:
+            raw_datasets = raw_datasets.filter(filter_by_word_count)
+        
     elif 'eval' in data_args.dataset_name:
         with training_args.main_process_first(desc="format input prompt"):
             raw_datasets = raw_datasets.map(
@@ -583,7 +596,7 @@ Q: '''
             knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
             no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
             recompute_dists=knn_args.recompute_dists,
-            k=knn_args.k, t=knn_args.t, lmbda1=knn_args.lmbda1, lmbda2=knn_args.lmbda2, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
+            k=knn_args.k, t=knn_args.t, lmbda1=knn_args.lmbda1, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
             no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
             members=knn_args.members)
     elif knn_args.knn:
@@ -592,14 +605,16 @@ Q: '''
             knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
             no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
             recompute_dists=knn_args.recompute_dists,
-            k=knn_args.k, t=knn_args.t, lmbda1=knn_args.lmbda1, lmbda2=knn_args.lmbda2, knn_temp=knn_args.knn_temp, probe=knn_args.probe)
+            k=knn_args.k, t=knn_args.t, lmbda1=knn_args.lmbda1, knn_temp=knn_args.knn_temp, probe=knn_args.probe)
     
     if knn_wrapper is not None:
         knn_wrapper.break_into(model)
         if knn_args.dstore_size is not None:
             knn_wrapper.dstore_size, knn_wrapper.dstore_damb = knn_args.dstore_size, None
-            knn_wrapper.index, knn_wrapper.keys, knn_wrapper.vals = knn_wrapper.setup_faiss()
+            knn_wrapper.reconstruct_index, knn_wrapper.index, knn_wrapper.keys, knn_wrapper.vals = knn_wrapper.setup_faiss()
             knn_wrapper.unique = True
+        if knn_args.retomaton:
+            knn_wrapper.load_retomaton()
 
     def postprocess_trivia(answer):
         if answer == '': 
@@ -625,14 +640,16 @@ Q: '''
         match = re.search(r"Answer:\s*([A-Z])", answer)
         if match:
             value = match.group(1)
-            if value == 'A':
-                return 0
-            if value == 'B':
-                return 1
-            if value == 'C':
-                return 2
-            if value == 'D':
-                return 3
+        else: 
+            value = answer.split('\n')[0].strip()
+        if value == 'A':
+            return 0
+        if value == 'B':
+            return 1
+        if value == 'C':
+            return 2
+        if value == 'D':
+            return 3
         return answer
     
     def match(pred, answers):
@@ -665,13 +682,13 @@ Q: '''
             knn_args.lambda1=0
             knn_args.k = 0
             knn_args.knn_temp = 0
-        batch_size = 2 if knn_wrapper is not None else 10
+        batch_size = 2 if knn_wrapper is not None else 32
         outputs = []
         num_beams = 5
         if 'trivia' in data_args.dataset_name:
             max_new_tokens = 24 
         elif 'gsm' in  data_args.dataset_name:
-            max_new_tokens = 512
+            max_new_tokens = 175
         elif 'mmlu' in  data_args.dataset_name:
             max_new_tokens = 10
         elif 'eval' in  data_args.dataset_name:
@@ -681,7 +698,7 @@ Q: '''
             knn_wrapper.max_new_tokens = max_new_tokens
             logger.info(f'max_new_tokens: {knn_wrapper.max_new_tokens}')
             knn_wrapper.num_beams = num_beams
-            if 'trivia' in data_args.dataset_name:
+            if 'trivia' in data_args.dataset_name and not knn_wrapper.unique:
                 dstore_path = knn_args.dstore_dir + '/0rc.pkl'
                 with open(dstore_path, 'rb') as file:
                     knn_wrapper.dstore_sizes = pickle.load(file)
@@ -690,30 +707,24 @@ Q: '''
         tokenizer.pad_token_id = tokenizer.eos_token_id
         
         text_generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
-        # raw_datasets[data_args.eval_subset] = raw_datasets[data_args.eval_subset].select(range(1260,2000))
+        # raw_datasets[data_args.eval_subset] = raw_datasets[data_args.eval_subset].select(range(25))
         logger.info(f'[{data_args.eval_subset}] has {raw_datasets[data_args.eval_subset].num_rows}')
         input_dataset = raw_datasets[data_args.eval_subset][text_column_name]
         input_dataset = ListDataset(input_dataset)
         start = datetime.datetime.now()
         
+        
         logger.info(f'Running generation pipeline')
-        # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-        #     with record_function("model_inference"):
-                # model(inputs)
         outputs = []
         for out in tqdm(text_generator(input_dataset, batch_size = batch_size, max_new_tokens=max_new_tokens, pad_token_id = tokenizer.eos_token_id, num_beams = num_beams), total = len(input_dataset)):
-            # print(len(out))
             outputs = outputs + out
             torch.cuda.empty_cache()
         logger.info(f'Generating answers took {datetime.datetime.now() - start} s')
-        # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-        # print(outputs)
         outputs = [op['generated_text'] for op in outputs]
         
         answers = []
         for op, row in zip(outputs, raw_datasets[data_args.eval_subset][text_column_name]):
             answer = op[len(row):]
-            # answer = answer.split('\n')[0]
             answers.append(answer)
         outputs = answers
         answers = []
@@ -722,7 +733,6 @@ Q: '''
             # Calculating metrics
             match_list = [match(pred, ans['normalized_aliases']) for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['answer'])]
             metric_em = sum(match_list)/raw_datasets[data_args.eval_subset].num_rows*100
-            # print(f'{sum(match_list)}/{raw_datasets[data_args.eval_subset].num_rows},{metric_em}')
             f1_list = [f1_score(pred, ans['normalized_aliases']) for pred,ans in zip(answers, raw_datasets[data_args.eval_subset]['answer'])]
             metric_f1 = sum(f1_list)/raw_datasets[data_args.eval_subset].num_rows*100
             if not os.path.exists(training_args.output_dir):
@@ -737,23 +747,20 @@ Q: '''
             
             time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
             
-            fieldnames = ['time', 'model', 'dataset', 'retomaton', 'knn', 'lambda1', 'lambda2', 'block_size', 'k','knn_temp', 't', 'max_new_tokens', 'dstore_size', 'exact_match','f1', 'notes']
+            fieldnames = ['time', 'model', 'dataset', 'dstore_path' ,'knn', 'retomaton','lambda', 'k','knn_temp', 'dstore_size', 'exact_match','f1', 'notes']
             metrics_to_file = { 'time': time_st,
                 'model': model_args.model_name_or_path,
                 'dataset': data_args.dataset_name,
-                'retomaton': knn_args.retomaton, 
+                'dstore_path': knn_args.dstore_dir if knn_wrapper is not None else 'None',
                 'knn': knn_args.knn, 
-                'lambda1': knn_args.lmbda1,
-                'lambda2' : knn_args.lmbda2, 
-                'block_size': block_size, 
-                'k': knn_args.k,
-                'knn_temp': knn_args.knn_temp,
-                't' : knn_args.t,
-                'max_new_tokens' : max_new_tokens,
-                'dstore_size' : knn_args.dstore_size,
+                'retomaton': knn_args.retomaton,
+                'lambda': knn_args.lmbda1 if knn_wrapper is not None else 0, 
+                'k': knn_args.k if knn_wrapper is not None else 0,
+                'knn_temp': knn_args.knn_temp if knn_wrapper is not None else 0,
+                'dstore_size' : knn_args.dstore_size if knn_wrapper is not None else 0,
                 'exact_match' : round(metric_em, 2),
                 'f1' : round(metric_f1,2),
-                'notes':  'sample',
+                'notes':  'kNN/reto_' + str(len(input_dataset)) if knn_wrapper is not None else 'Base_' + str(len(input_dataset)),
             }
         elif 'gsm' in data_args.dataset_name:
             answers = [process_gsm(op) for op in outputs]
@@ -773,7 +780,7 @@ Q: '''
             
             time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
             
-            fieldnames = ['time', 'model', 'dataset', 'dstore_path' ,'knn', 'retomaton','lambda', 'k','knn_temp', 'dstore_size', 'accuracy', 'notes']
+            fieldnames = ['time', 'model', 'dataset', 'dstore_path' ,'knn', 'retomaton','lambda', 'k', 'min_knns', 'knn_temp', 'dstore_size', 'fss', 'accuracy', 'notes']
             metrics_to_file = { 'time': time_st,
                 'model': model_args.model_name_or_path,
                 'dataset': data_args.dataset_name,
@@ -782,8 +789,10 @@ Q: '''
                 'retomaton': knn_args.retomaton,
                 'lambda': knn_args.lmbda1 if knn_wrapper is not None else 0, 
                 'k': knn_args.k if knn_wrapper is not None else 0,
+                'min_knns': knn_args.min_knns if knn_wrapper is not None else 0,
                 'knn_temp': knn_args.knn_temp if knn_wrapper is not None else 0,
                 'dstore_size' : knn_args.dstore_size if knn_wrapper is not None else 0,
+                'fss' : knn_wrapper.get_metrics()['lookups_saved'],
                 'accuracy' : round(accuracy, 2),
                 'notes':  'kNN/reto_' + str(len(input_dataset)) if knn_wrapper is not None else 'Base_' + str(len(input_dataset)),
             }
@@ -803,7 +812,7 @@ Q: '''
             
             time_st = time.strftime("%Y-%m-%d_%H:%M:%S")
             
-            fieldnames = ['time', 'model', 'dataset', 'dstore_path' ,'knn', 'retomaton','lambda', 'k','knn_temp', 'dstore_size', 'accuracy', 'notes']
+            fieldnames = ['time', 'model', 'dataset', 'dstore_path' ,'knn', 'retomaton','lambda', 'k', 'min_knns', 'knn_temp', 'dstore_size', 'accuracy', 'notes']
             metrics_to_file = { 'time': time_st,
                 'model': model_args.model_name_or_path,
                 'dataset': data_args.dataset_name,
@@ -812,6 +821,7 @@ Q: '''
                 'retomaton': knn_args.retomaton,
                 'lambda': knn_args.lmbda1 if knn_wrapper is not None else 0, 
                 'k': knn_args.k if knn_wrapper is not None else 0,
+                'min_knns': knn_args.min_knns if knn_wrapper is not None else 0,
                 'knn_temp': knn_args.knn_temp if knn_wrapper is not None else 0,
                 'dstore_size' : knn_args.dstore_size if knn_wrapper is not None else 0,
                 'accuracy' : round(accuracy, 2),
