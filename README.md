@@ -116,7 +116,7 @@ set_retoMaton_beam_idx(beam_idx)
 ```
 Here’s what the modified portion of `_beam_search()` will look like:
 
-<left style="padding: 40px"><img width="30%" src="images/beam_idx.png" /></left>
+<left style="padding: 40px"><img width="70%" src="images/beam_idx.png" /></left>
 
 To evaluate Local RetoMaton on the test set, run:
 
