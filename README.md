@@ -96,7 +96,29 @@ For example, to download the math datastore, run:
 
 ### Evaluating Reasoning on the different benchmark with local RetoMaton
 
-To evaluate Local ReetoMaton on the test set, run:
+The RetoMaton framework relies on the internal beam index order to traverse its weighted automaton states accurately.
+To expose this information during generation, we modified `transformers/generation/utils.py` (Transformers v4.48.3, Python 3.10) to include lightweight getter and setter methods immediately after the import statements, and inserted a single hook line in the _beam_search() method after beam_scorer.process() returns the sorted beams.
+
+Add this block after the import section:
+```
+retoMaton_beam_idx = None
+
+def get_retoMaton_beam_idx():
+    return retoMaton_beam_idx
+
+def set_retoMaton_beam_idx(val):
+    global retoMaton_beam_idx
+    retoMaton_beam_idx = val.clone().detach()
+```
+Then add the line below in the `_beam_search(..)` method after the sorted beams are retured by the `beam_scorer.process(..)`. 
+```
+set_retoMaton_beam_idx(beam_idx)
+```
+Here’s what the modified portion of `_beam_search()` will look like:
+
+<left style="padding: 40px"><img width="30%" src="images/beam_idx.png" /></left>
+
+To evaluate Local RetoMaton on the test set, run:
 
 ```
  MODEL=meta-llama/Llama-3.2-1B
