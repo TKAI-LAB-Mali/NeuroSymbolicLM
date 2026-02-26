@@ -140,10 +140,12 @@ Additional test-time tunable hyperparameters include `--lmbda1`, which controls 
 If you find our work helpful, please use the following citations.
 
 ```
-@article{mamidala2025rethinking,
-  title={Rethinking Reasoning in LLMs: Neuro-Symbolic Local RetoMaton Beyond ICL and CoT},
-  author={Mamidala, Rushitha Santhoshi and Chhabra, Anshuman and Mali, Ankur},
-  journal={arXiv preprint arXiv:2508.19271},
-  year={2025}
+@inproceedings{
+mamidala2025rethinking,
+title={Rethinking Reasoning in {LLM}s: Neuro-Symbolic Local RetoMaton Beyond CoT and {ICL}},
+author={Rushitha Santhoshi Mamidala and Anshuman Chhabra and Ankur Mali},
+booktitle={19th International Conference on Neurosymbolic Learning and Reasoning},
+year={2025},
+url={https://openreview.net/forum?id=ySTqCi3nqi}
 }
 ```
