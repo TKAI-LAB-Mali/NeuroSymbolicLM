@@ -1,5 +1,5 @@
 # Rethinking Reasoning in LLMs: Neuro-Symbolic Local RetoMaton Beyond ICL and CoT
-| [Paper](https://arxiv.org/abs/2408.11815) |
+| [Paper](https://arxiv.org/abs/2508.19271) |
 
 
 
